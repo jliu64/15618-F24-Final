@@ -5,7 +5,7 @@ Title: Airplane flight routing in parallel
 
 Team members: Jesse Liu (jzliu@andrew.cmu.edu), Enxu Han (enxuh@andrew.cmu.edu)
 
-URL:
+URL: https://github.com/jliu64/15618-F24-Final
 
 Summary: We aim to optimize the current flight routing algorithm by incorporating parallelism to enhance both performance and efficiency.
 
