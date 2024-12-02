@@ -42,8 +42,9 @@ Hope to achieve:
 ### Platform choice:
 C/C++. Cuda, OpenMP, MPI, SIMD. More specifically, we will be implementing our initial program in C/C++, then comparing the performances of different implementations using the aforementioned frameworks.
 
-### Schedule:
-- 11/17-11/23: Initial C/C++ sequential implementation of flight routing algorithm, initial runs on real-world dataset if possible.
-- 11/24-11/30: First parallelized version of flight routing algorithm, experiments and performance comparison with sequential version. Probably CUDA. Project milestone report.
-- 12/1-12/7: Second parallelized version and corresponding experiments. Probably OpenMP.
-- 12/8-12/14: Third parallelized version, corresponding experiments, and graph visualization. Final project report.
+### Schedule (updated for milestone report):
+- 11/17-11/30: Initial sequential implementation and first parallelized version (i.e. CUDA) of flight routing algorithm, experiments and performance comparison with sequential version.
+- 12/1-12/4: Complete experiments and performance comparison with CUDA implementation.
+- 12/4-12/7: OpenMP implementation and corresponding experiments. Gather data on performance relative to sequential and CUDA implementations.
+- 12/8-12/11: MPI implementation and corresponding experiments. Gather data on performance relative to sequential, CUDA, and OpenMP implementations.
+- 12/11-12/14: Graph visualization, likely using FlightMapper.io. Final project report.
