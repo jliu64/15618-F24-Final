@@ -17,12 +17,12 @@ struct flight {
 // Define a plane structure
 struct plane {
   int id;
-  std::vector <std::string> assigned_flights;
+  std::vector<std::string> assigned_flights;
 };
 
 // Build the flight graph
-std::unordered_map <std::string, std::vector<flight>> build_flight_graph(const std::vector <flight> &flights) {
-  std::unordered_map <std::string, std::vector<flight>> graph;
+std::unordered_map<std::string, std::vector<flight>> build_flight_graph(const std::vector<flight> &flights) {
+  std::unordered_map<std::string, std::vector<flight>> graph;
   for (const auto &f: flights) {
     graph[f.source].push_back(f);
   }
@@ -31,14 +31,13 @@ std::unordered_map <std::string, std::vector<flight>> build_flight_graph(const s
 
 // Assign flights to planes using OpenMP
 std::unordered_map<int, plane> assign_flights(
-  const std::unordered_map <std::string, std::vector<flight>> &flight_graph,
+  const std::unordered_map<std::string, std::vector<flight>> &flight_graph,
   const std::unordered_map<std::string, int> &initial_positions,
-  const std::unordered_map<std::string, int> &final_requirements,
+  std::unordered_map<std::string, int> &final_positions,
   int fleet_size) {
 
   std::unordered_map<int, plane> plane_assignments;
   std::vector<int> plane_used(fleet_size, 0);
-  std::unordered_map<std::string, int> final_positions;
 
   // Initialize planes
   #pragma omp parallel for
@@ -47,7 +46,7 @@ std::unordered_map<int, plane> assign_flights(
   }
 
   // Convert the unordered_map to a vector for OpenMP compatibility
-  std::vector <std::pair<std::string, int>> positions_vec(initial_positions.begin(), initial_positions.end());
+  std::vector<std::pair<std::string, int>> positions_vec(initial_positions.begin(), initial_positions.end());
 
   // Parallel loop over the vector of initial positions
   #pragma omp parallel for
@@ -59,6 +58,7 @@ std::unordered_map<int, plane> assign_flights(
     for (int p = 0; p < planes_available; ++p) {
       // Find an available plane
       int plane_id = -1;
+
       #pragma omp critical
       {
         for (int i = 0; i < fleet_size; ++i) {
@@ -73,8 +73,8 @@ std::unordered_map<int, plane> assign_flights(
       if (plane_id == -1) continue; // No plane available
 
       // BFS to assign flights to the plane
-      std::unordered_set <std::string> visited;
-      std::queue <std::string> to_visit;
+      std::unordered_set<std::string> visited;
+      std::queue<std::string> to_visit;
       to_visit.push(start_airport);
 
       while (!to_visit.empty()) {
@@ -103,30 +103,44 @@ std::unordered_map<int, plane> assign_flights(
     }
   }
 
-  // Check final requirements
-  bool requirements_met = true;
+  return plane_assignments;
+}
+
+// Validate final assignments
+bool validate_assignments(const std::unordered_map<std::string, int> &final_positions,
+                          const std::unordered_map<std::string, int> &final_requirements) {
+  bool all_met = true;
   for (const auto &req: final_requirements) {
-    if (final_positions[req.first] < req.second) {
-      requirements_met = false;
-      std::cerr << "Requirement not met at airport: " << req.first << "\n";
+    if (final_positions.at(req.first) < req.second) {
+      all_met = false;
+      std::cerr << "Requirement not met at airport: " << req.first << " ("
+                << final_positions.at(req.first) << "/" << req.second << " planes available)\n";
     }
   }
+  return all_met;
+}
 
+// Print assignments in consistent format
+void print_assignments(const std::unordered_map<int, plane> &plane_assignments, bool requirements_met) {
   if (requirements_met) {
-    std::cout << "All final requirements met.\n";
+    for (const auto &entry: plane_assignments) {
+      const auto &p = entry.second;
+      std::cout << "Plane_" << p.id << " Assignments:\n";
+      for (const auto &route: p.assigned_flights) {
+        std::cout << "  " << route << "\n";
+      }
+    }
   } else {
-    std::cerr << "Some requirements were not met.\n";
+    std::cout << "Unmet Requirements. No valid flight chains.\n";
   }
-
-  return plane_assignments;
 }
 
 int main() {
   int num_threads = 4;
   omp_set_num_threads(num_threads);
 
-  // Dummy flight data
-  std::vector <flight> flights = {
+  // Flight data
+  std::vector<flight> flights = {
     {"LAX", "JFK", "AA", 0, "738"},
     {"JFK", "ATL", "AA", 0, "738"},
     {"ATL", "LAX", "AA", 0, "738"}
@@ -150,20 +164,23 @@ int main() {
   int fleet_size = 2;
 
   // Build the flight graph
-  std::unordered_map <std::string, std::vector<flight>> flight_graph = build_flight_graph(flights);
+  std::unordered_map<std::string, std::vector<flight>> flight_graph = build_flight_graph(flights);
+
+  // Final positions tracker
+  std::unordered_map<std::string, int> final_positions;
+  for (const auto &req: final_requirements) {
+    final_positions[req.first] = 0;
+  }
 
   // Assign flights to planes
   std::unordered_map<int, plane> plane_assignments = assign_flights(
-    flight_graph, initial_positions, final_requirements, fleet_size);
+    flight_graph, initial_positions, final_positions, fleet_size);
 
-  // Output results
-  for (const auto &entry: plane_assignments) {
-    const auto &p = entry.second;
-    std::cout << "Plane_" << p.id << " Assignments:\n";
-    for (const auto &route: p.assigned_flights) {
-      std::cout << "  " << route << "\n";
-    }
-  }
+  // Validate assignments
+  bool requirements_met = validate_assignments(final_positions, final_requirements);
+
+  // Print results
+  print_assignments(plane_assignments, requirements_met);
 
   return 0;
 }
