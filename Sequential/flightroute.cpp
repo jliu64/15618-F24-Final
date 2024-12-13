@@ -3,146 +3,22 @@
  * Jesse Liu (jzliu), Oscar Han (Enxuh)
  */
 
-#include <algorithm>
+//#include <algorithm>
 #include <iostream>
 #include <fstream>
-#include <iomanip>
+#include <sstream>
+//#include <iomanip>
 #include <chrono>
-#include <string>
-#include <vector>
 
-#include <unistd.h>
-#include <omp.h>
-#include <stdlib.h>
-#include <cmath>
-#include <climits>
-#include <utility>
-/*
-void print_stats(const std::vector<std::vector<int>>& occupancy) {
-  int max_occupancy = 0;
-  long long total_cost = 0;
+//#include <unistd.h>
+//#include <stdlib.h>
+//#include <cmath>
+//#include <climits>
+//#include <utility>
 
-  for (const auto& row : occupancy) {
-    for (const int count : row) {
-      max_occupancy = std::max(max_occupancy, count);
-      total_cost += count * count;
-    }
-  }
+#include "flightroute.h"
 
-  std::cout << "Max occupancy: " << max_occupancy << '\n';
-  std::cout << "Total cost: " << total_cost << '\n';
-}
-*/
-/*
-void write_output(const std::vector<Wire>& wires, const int num_wires, const std::vector<std::vector<int>>& occupancy, const int dim_x, const int dim_y, const int num_threads, std::string input_filename) {
-  if (std::size(input_filename) >= 4 && input_filename.substr(std::size(input_filename) - 4) == ".txt") {
-    input_filename.resize(std::size(input_filename) - 4);
-  }
-
-  const std::string occupancy_filename = input_filename + "_occupancy_" + std::to_string(num_threads) + ".txt";
-  const std::string wires_filename = input_filename + "_wires_" + std::to_string(num_threads) + ".txt";
-
-  std::ofstream out_occupancy(occupancy_filename, std::fstream::out);
-  if (!out_occupancy) {
-    std::cerr << "Unable to open file: " << occupancy_filename << '\n';
-    exit(EXIT_FAILURE);
-  }
-
-  out_occupancy << dim_x << ' ' << dim_y << '\n';
-  for (const auto& row : occupancy) {
-    for (const int count : row) {
-      out_occupancy << count << ' ';
-    }
-    out_occupancy << '\n';
-  }
-
-  out_occupancy.close();
-
-  std::ofstream out_wires(wires_filename, std::fstream:: out);
-  if (!out_wires) {
-    std::cerr << "Unable to open file: " << wires_filename << '\n';
-    exit(EXIT_FAILURE);
-  }
-
-  out_wires << dim_x << ' ' << dim_y << '\n' << num_wires << '\n';
-
-  for (const auto& [start_x, start_y, end_x, end_y, bend1_x, bend1_y] : wires) {
-    out_wires << start_x << ' ' << start_y << ' ' << bend1_x << ' ' << bend1_y << ' ';
-
-    if (start_y == bend1_y) {
-    // first bend was horizontal
-
-      if (end_x != bend1_x) {
-        // two bends
-
-        out_wires << bend1_x << ' ' << end_y << ' ';
-      }
-    } else if (start_x == bend1_x) {
-      // first bend was vertical
-
-      if(end_y != bend1_y) {
-        // two bends
-
-        out_wires << end_x << ' ' << bend1_y << ' ';
-      }
-    }
-    out_wires << end_x << ' ' << end_y << '\n';
-  }
-
-  out_wires.close();
-}
-*/
-
-int main(int argc, char *argv[]) {
-  const auto init_start = std::chrono::steady_clock::now();
-
-  std::string input_filename;
-  int num_threads = 0;
-  double SA_prob = 0.1;
-  int SA_iters = 5;
-  char parallel_mode = '\0';
-  int batch_size = 1;
-
-  int opt;
-  while ((opt = getopt(argc, argv, "f:n:p:i:m:b:")) != -1) {
-    switch (opt) {
-      case 'f':
-        input_filename = optarg;
-        break;
-      case 'n':
-        num_threads = atoi(optarg);
-        break;
-      case 'p':
-        SA_prob = atof(optarg);
-        break;
-      case 'i':
-        SA_iters = atoi(optarg);
-        break;
-      case 'm':
-        parallel_mode = *optarg;
-        break;
-      case 'b':
-        batch_size = atoi(optarg);
-        break;
-      default:
-        std::cerr << "Usage: " << argv[0] << " -f input_filename -n num_threads [-p SA_prob] [-i SA_iters] -m parallel_mode -b batch_size\n";
-        exit(EXIT_FAILURE);
-    }
-  }
-
-  // Check if required options are provided
-  if (empty(input_filename) || num_threads <= 0 || SA_iters <= 0 || (parallel_mode != 'A' && parallel_mode != 'W') || batch_size <= 0) {
-    std::cerr << "Usage: " << argv[0] << " -f input_filename -n num_threads [-p SA_prob] [-i SA_iters] -m parallel_mode -b batch_size\n";
-    exit(EXIT_FAILURE);
-  }
-
-  std::cout << "Number of threads: " << num_threads << '\n';
-  std::cout << "Simulated annealing probability parameter: " << SA_prob << '\n';
-  std::cout << "Simulated annealing iterations: " << SA_iters << '\n';
-  std::cout << "Input file: " << input_filename << '\n';
-  std::cout << "Parallel mode: " << parallel_mode << '\n';
-  std::cout << "Batch size: " << batch_size << '\n';
-
+std::vector<std::vector<std::string>> read_routes_file(std::string &input_filename) {
   std::ifstream fin(input_filename);
 
   if (!fin) {
@@ -150,392 +26,212 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
-  int dim_x, dim_y;
-  int num_wires;
+  std::vector<std::vector<std::string>> route_data;
 
-  /* Read the grid dimension and wire information from file */
-  fin >> dim_x >> dim_y >> num_wires;
+  // Skip first line
+  std::string line;
+  std::getline(fin, line);
 
-  std::vector<Wire> wires(num_wires);
-  std::vector occupancy(dim_y, std::vector<int>(dim_x));
+  while (std::getline(fin, line)) {
+    std::vector<std::string> fields;
+    std::istringstream iss(line);
+    std::string field;
 
-  for (auto& wire : wires) {
-    fin >> wire.start_x >> wire.start_y >> wire.end_x >> wire.end_y;
-    wire.bend1_x = -1;
-    wire.bend1_y = -1;
+    while (std::getline(iss, field, ',')) {
+      std::cout << field << std::endl;
+      fields.push_back(field);
+    }
+
+    if (!iss && field.empty()) { // Check for empty equipment field
+      fields.push_back("");
+    }
+    std::cout << std::endl;
+
+    route_data.push_back(fields);
   }
 
-  /* Initialize any additional data structures needed in the algorithm */
-  omp_set_num_threads(num_threads);
-  std::vector locks(dim_y, std::vector<omp_lock_t>(dim_x));
-  std::vector<std::pair<int, int>> mins(num_wires);
-  if (parallel_mode == 'A') {
-    for (auto& row : locks) {
-      for (omp_lock_t lock : row) {
-        omp_init_lock(&lock);
-      }
-    }
-  }
-
-  const double init_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - init_start).count();
-  std::cout << "Initialization time (sec): " << std::fixed << std::setprecision(10) << init_time << '\n';
-
-  const auto compute_start = std::chrono::steady_clock::now();
-
-  /** 
-   * Implement the wire routing algorithm here
-   * Feel free to structure the algorithm into different functions
-   * Don't use global variables.
-   * Use OpenMP to parallelize the algorithm. 
-   */
-  if (parallel_mode == 'W') {
-    for (int iter = 0; iter < SA_iters; iter++) {
-      for (auto& wire : wires) {
-        // If wire is completely horizontal or vertical, there's only one valid path
-        if (wire.start_x == wire.end_x || wire.start_y == wire.end_y) {
-          if (wire.bend1_x == -1 && wire.bend1_y == -1) { // Wire shouldn't already have a path
-            wire.bend1_x = wire.start_x;
-            wire.bend1_y = wire.start_y;
-            add_occupancy(wire, occupancy);
-          }
-
-          continue;
-        }
-
-        // With probability P, choose a random path
-        double r = ((double) rand() / (RAND_MAX));
-        if (r < SA_prob) {
-          int hori_or_vert = rand() % 2;
-          int x, y;
-          if (hori_or_vert == 0) { // Path starts horizontally
-            x = std::max(1, rand() % std::abs(wire.start_x - wire.end_x));
-            x = wire.start_x <= wire.end_x ? wire.start_x + x : wire.start_x - x;
-            y = wire.start_y;
-          } else {
-            y = std::max(1, rand() % std::abs(wire.start_y - wire.end_y));
-            y = wire.start_y <= wire.end_y ? wire.start_y + y : wire.start_y - y;
-            x = wire.start_x;
-          }
-          if (wire.bend1_x != -1 && wire.bend1_y != -1) { // Wire already has a path
-            clear_occupancy(wire, occupancy);
-          }
-          wire.bend1_x = x;
-          wire.bend1_y = y;
-          add_occupancy(wire, occupancy);
-          continue;
-        }
-
-        // Compute minimum path for given wire
-        int min_x = -1;
-        int min_y = -1;
-        int min_max = INT_MAX;
-
-        // If wire is already at minimum, don't bother
-        if (wire.bend1_x != -1 && wire.bend1_y != -1) {
-          min_max = compute_theory_max(wire, occupancy, wire.bend1_x, wire.bend1_y, min_max);
-          min_x = wire.bend1_x;
-          min_y = wire.bend1_y;
-          if (min_max == 1) continue;
-        }
-
-        // Check paths that start horizontally
-        if (wire.start_x <= wire.end_x) {
-          #pragma omp parallel for schedule(dynamic)
-            for (int x = wire.start_x + 1; x <= wire.end_x; x++) {
-              if (min_max == 1) continue;
-              int max = compute_theory_max(wire, occupancy, x, wire.start_y, min_max);
-              bool match = false;
-              {
-                #pragma omp critical
-                  if (max < min_max) {
-                    min_max = max;
-                    min_x = x;
-                    min_y = wire.start_y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-              }
-              if (match) {
-                int old_cost = compute_theory_cost(wire, occupancy, min_x, min_y);
-                int new_cost = compute_theory_cost(wire, occupancy, x, wire.start_y);
-                #pragma omp critical
-                  if (old_cost < new_cost) {
-                    min_x = x;
-                    min_y = wire.start_y;
-                  }
-              }
-            }
-        } else {
-          #pragma omp parallel for schedule(dynamic)
-            for (int x = wire.start_x - 1; x >= wire.end_x; x--) {
-              if (min_max == 1) continue;
-              int max = compute_theory_max(wire, occupancy, x, wire.start_y, min_max);
-              bool match = false;
-              {
-                #pragma omp critical
-                  if (max < min_max) {
-                    min_max = max;
-                    min_x = x;
-                    min_y = wire.start_y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-              }
-              if (match) {
-                int old_cost = compute_theory_cost(wire, occupancy, min_x, min_y);
-                int new_cost = compute_theory_cost(wire, occupancy, x, wire.start_y);
-                #pragma omp critical
-                  if (old_cost < new_cost) {
-                    min_x = x;
-                    min_y = wire.start_y;
-                  }
-              }
-            }
-        }
-
-        // Check paths that start vertically
-        if (wire.start_y <= wire.end_y) {
-          #pragma omp parallel for schedule(dynamic)
-            for (int y = wire.start_y + 1; y <= wire.end_y; y++) {
-              if (min_max == 1) continue;
-              int max = compute_theory_max(wire, occupancy, wire.start_x, y, min_max);
-              bool match = false;
-              {
-                #pragma omp critical
-                  if (max < min_max) {
-                    min_max = max;
-                    min_x = wire.start_x;
-                    min_y = y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-              }
-              if (match) {
-                int old_cost = compute_theory_cost(wire, occupancy, min_x, min_y);
-                int new_cost = compute_theory_cost(wire, occupancy, wire.start_x, y);
-                #pragma omp critical
-                  if (old_cost < new_cost) {
-                    min_x = wire.start_x;
-                    min_y = y;
-                  }
-              }
-            }
-        } else {
-          #pragma omp parallel for schedule(dynamic)
-            for (int y = wire.start_y - 1; y >= wire.end_y; y--) {
-              if (min_max == 1) continue;
-              int max = compute_theory_max(wire, occupancy, wire.start_x, y, min_max);
-              bool match = false;
-              {
-                #pragma omp critical
-                  if (max < min_max) {
-                    min_max = max;
-                    min_x = wire.start_x;
-                    min_y = y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-              }
-              if (match) {
-                int old_cost = compute_theory_cost(wire, occupancy, min_x, min_y);
-                int new_cost = compute_theory_cost(wire, occupancy, wire.start_x, y);
-                #pragma omp critical
-                  if (old_cost < new_cost) {
-                    min_x = wire.start_x;
-                    min_y = y;
-                  }
-              }
-            }
-        }
-
-        if (wire.bend1_x != min_x && wire.bend1_y != min_y) {
-          if (wire.bend1_x != -1 && wire.bend1_y != -1) { // Wire already has a path
-            clear_occupancy(wire, occupancy);
-          }
-          wire.bend1_x = min_x;
-          wire.bend1_y = min_y;
-          add_occupancy(wire, occupancy);
-        }
-      }
-    }
-  } else { // Parallelize across wires
-    for (int iter = 0; iter < SA_iters; iter++) {
-      for (int i = 0; i < num_wires; i += batch_size) {
-        // Compute minimum paths for each wire in the batch in parallel
-        int batch_end = std::min(i + batch_size, num_wires);
-
-        #pragma omp parallel for schedule(dynamic)
-          for (int j = i; j < batch_end; j++) {
-            Wire& wire = wires[j];
-
-            // If wire is completely horizontal or vertical, there's only one valid path
-            if (wire.start_x == wire.end_x || wire.start_y == wire.end_y) {
-              if (wire.bend1_x == -1 && wire.bend1_y == -1) { // Wire shouldn't already have a path
-                mins[j].first = wire.start_x;
-                mins[j].second = wire.start_y;
-              }
-
-              continue;
-            }
-
-            // With probability P, choose a random path
-            double r = ((double) rand() / (RAND_MAX));
-            if (r < SA_prob) {
-              int hori_or_vert = rand() % 2;
-              int x, y;
-              if (hori_or_vert == 0) { // Path starts horizontally
-                x = std::max(1, rand() % std::abs(wire.start_x - wire.end_x));
-                x = wire.start_x <= wire.end_x ? wire.start_x + x : wire.start_x - x;
-                y = wire.start_y;
-              } else {
-                y = std::max(1, rand() % std::abs(wire.start_y - wire.end_y));
-                y = wire.start_y <= wire.end_y ? wire.start_y + y : wire.start_y - y;
-                x = wire.start_x;
-              }
-              
-              mins[j].first = x;
-              mins[j].second = y;
-              continue;
-            }
-
-            // Compute minimum path for given wire
-            int min_max = INT_MAX;
-
-            // If wire is already at minimum, don't bother
-            if (wire.bend1_x != -1 && wire.bend1_y != -1) {
-              min_max = compute_theory_max(wire, occupancy, wire.bend1_x, wire.bend1_y, min_max);
-              mins[j].first = wire.bend1_x;
-              mins[j].second = wire.bend1_y;
-              if (min_max == 1) continue;
-            }
-
-            // Check paths that start horizontally
-            if (wire.start_x <= wire.end_x) {
-              for (int x = wire.start_x + 1; x <= wire.end_x; x++) {
-                if (min_max == 1) continue;
-                int max = compute_theory_max(wire, occupancy, x, wire.start_y, min_max);
-                bool match = false;
-                {
-                  if (max < min_max) {
-                    min_max = max;
-                    mins[j].first = x;
-                    mins[j].second = wire.start_y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-                }
-                if (match) {
-                  int old_cost = compute_theory_cost(wire, occupancy, mins[j].first, mins[j].second);
-                  int new_cost = compute_theory_cost(wire, occupancy, x, wire.start_y);
-                  if (old_cost < new_cost) {
-                    mins[j].first = x;
-                    mins[j].second = wire.start_y;
-                  }
-                }
-              }
-            } else {
-              for (int x = wire.start_x - 1; x >= wire.end_x; x--) {
-                if (min_max == 1) continue;
-                int max = compute_theory_max(wire, occupancy, x, wire.start_y, min_max);
-                bool match = false;
-                {
-                  if (max < min_max) {
-                    min_max = max;
-                    mins[j].first = x;
-                    mins[j].second = wire.start_y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-                }
-                if (match) {
-                  int old_cost = compute_theory_cost(wire, occupancy, mins[j].first, mins[j].second);
-                  int new_cost = compute_theory_cost(wire, occupancy, x, wire.start_y);
-                  if (old_cost < new_cost) {
-                    mins[j].first = x;
-                    mins[j].second = wire.start_y;
-                  }
-                }
-              }
-            }
-
-            // Check paths that start vertically
-            if (wire.start_y <= wire.end_y) {
-              for (int y = wire.start_y + 1; y <= wire.end_y; y++) {
-                if (min_max == 1) continue;
-                int max = compute_theory_max(wire, occupancy, wire.start_x, y, min_max);
-                bool match = false;
-                {
-                  if (max < min_max) {
-                    min_max = max;
-                    mins[j].first = wire.start_x;
-                    mins[j].second = y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-                }
-                if (match) {
-                  int old_cost = compute_theory_cost(wire, occupancy, mins[j].first, mins[j].second);
-                  int new_cost = compute_theory_cost(wire, occupancy, wire.start_x, y);
-                  if (old_cost < new_cost) {
-                    mins[j].first = wire.start_x;
-                    mins[j].second = y;
-                  }
-                }
-              }
-            } else {
-              for (int y = wire.start_y - 1; y >= wire.end_y; y--) {
-                if (min_max == 1) continue;
-                int max = compute_theory_max(wire, occupancy, wire.start_x, y, min_max);
-                bool match = false;
-                {
-                  if (max < min_max) {
-                    min_max = max;
-                    mins[j].first = wire.start_x;
-                    mins[j].second = y;
-                  } else if (max == min_max) {
-                    match = true;
-                  }
-                }
-                if (match) {
-                  int old_cost = compute_theory_cost(wire, occupancy, mins[j].first, mins[j].second);
-                  int new_cost = compute_theory_cost(wire, occupancy, wire.start_x, y);
-                  if (old_cost < new_cost) {
-                    mins[j].first = wire.start_x;
-                    mins[j].second = y;
-                  }
-                }
-              }
-            }
-          }
-        // Modify the occupancy matrix
-        #pragma omp parallel for schedule(dynamic)
-          for (int j = i; j < batch_end; j++) {
-            Wire& wire = wires[j];
-            if (wire.bend1_x != mins[j].first && wire.bend1_y != mins[j].second) {
-              if (wire.bend1_x != -1 && wire.bend1_y != -1) { // Wire already has a path
-                clear_occupancy_sync(wire, occupancy, locks);
-              }
-              wire.bend1_x = mins[j].first;
-              wire.bend1_y = mins[j].second;
-              add_occupancy_sync(wire, occupancy, locks);
-            }
-          }
-      }
-    }
-  }
-
-  const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - compute_start).count();
-  std::cout << "Computation time (sec): " << compute_time << '\n';
-  std::cout << "Total time (sec): " << init_time + compute_time << '\n';
-
-  /* Write wires and occupancy matrix to files */
-
-  print_stats(occupancy);
-  write_output(wires, num_wires, occupancy, dim_x, dim_y, num_threads, input_filename);
+  return route_data;
 }
 
-validate_wire_t Wire::to_validate_format(void) const {
-  /* TODO(student): Implement this if you want to use the wr_checker. */
-  /* See wireroute.h for details on validate_wire_t. */
-  throw std::logic_error("to_validate_format not implemented.");
+std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
+  std::ifstream fin(input_filename);
+
+  if (!fin) {
+    std::cerr << "Unable to open file: " << input_filename << ".\n";
+    exit(EXIT_FAILURE);
+  }
+
+  int num_flights, num_occupied_airports;
+  fin >> num_flights >> num_occupied_airports;
+
+  std::vector<Flight> flights(num_flights);
+  //std::vector occupancy(dim_y, std::vector<int>(dim_x));
+
+  for (auto& flight : flights) {
+    fin >> flight.depart_airport >> flight.depart_day >> flight.depart_time >>
+      flight.arrive_airport >> flight.arrive_day >> flight.arrive_time;
+    
+    // Note: Timesteps discretized into hours
+    int depart_timestep = flight.depart_day * 24 + flight.depart_time;
+    int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
+    if (depart_timestep >= arrive_timestep) {
+      std::cout << "Flight routing is infeasible with given flights." << std::endl;
+      exit(EXIT_SUCCESS);
+    }
+    timesteps.insert(depart_timestep);
+    timesteps.insert(arrive_timestep);
+  }
+
+  for (int i = 0; i < num_occupied_airports; i++) {
+    std::string airport;
+    int aircraft_count;
+    std::list<Airport*> adj_list;
+    fin >> airport >> aircraft_count;
+
+    airports[airport] = {aircraft_count, 0, -1, airport, adj_list};
+  }
+
+  return flights;
+}
+
+std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport> &start_airports) {
+  std::map<int, std::map<std::string, Airport>> timestep_airports;
+  timestep_airports[-1] = start_airports;
+  
+  // Add edges for flights
+  for (Flight &flight : flights) {
+    int depart_timestep = flight.depart_day * 24 + flight.depart_time;
+    int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
+    
+    // Initialize departure maps if non-existent
+    if (timestep_airports.find(depart_timestep) == timestep_airports.end()) {
+      std::map<std::string, Airport> airports;
+      timestep_airports[depart_timestep] = airports;
+    }
+    std::map<std::string, Airport> &depart_airports = timestep_airports[depart_timestep];
+    if (depart_airports.find(flight.depart_airport) == depart_airports.end()) {
+      std::list<Airport*> adj_list;
+      depart_airports[flight.depart_airport] = {0, 0, depart_timestep, flight.depart_airport, adj_list};
+    }
+    depart_airports[flight.depart_airport].num_departures++;
+
+    // Initialize arrival maps if non-existent
+    if (timestep_airports.find(arrive_timestep) == timestep_airports.end()) {
+      std::map<std::string, Airport> airports;
+      timestep_airports[arrive_timestep] = airports;
+    }
+    std::map<std::string, Airport> &arrive_airports = timestep_airports[arrive_timestep];
+    if (arrive_airports.find(flight.arrive_airport) == arrive_airports.end()) {
+      std::list<Airport*> adj_list;
+      arrive_airports[flight.arrive_airport] = {0, 0, arrive_timestep, flight.arrive_airport, adj_list};
+    }
+    arrive_airports[flight.arrive_airport].num_planes++;
+
+    // Add edge to graph
+    timestep_airports[depart_timestep][flight.depart_airport].adj_list.push_back(&timestep_airports[arrive_timestep][flight.arrive_airport]);
+  }
+
+  // Add edges for ground connections
+  for (auto &pair : start_airports) {
+    std::string code = pair.first;
+    Airport &airport = pair.second;
+    auto it = timesteps.begin();
+    if (timestep_airports.find(*it) == timestep_airports.end()) {
+      std::cerr << "Failed to initialize all nodes in graph." << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
+      it++;
+      if (it == timesteps.end()) {
+        std::cerr << "Failed to initialize all timesteps in graph." << std::endl;
+        exit(EXIT_FAILURE);
+      }
+    }
+    std::map<std::string, Airport> &airports = timestep_airports[*it];
+    airport.adj_list.push_back(&airports[code]);
+    airports[code].num_planes += (airport.num_planes - airport.num_departures);
+  }
+
+  std::set<int>::iterator iterator;
+  for (iterator = timesteps.begin(); iterator != timesteps.end(); iterator++) {
+    for (auto &pair : timestep_airports[*iterator]) {
+      std::string code = pair.first;
+      Airport &airport = pair.second;
+      std::set<int>::iterator it = iterator;
+      it++;
+      if (timestep_airports.find(*it) == timestep_airports.end()) break;
+      while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
+        it++;
+        if (it == timesteps.end()) break;
+      }
+      if (it != timesteps.end()) {
+        std::map<std::string, Airport> &airports = timestep_airports[*it];
+        airport.adj_list.push_back(&airports[code]);
+        airports[code].num_planes += (airport.num_planes - airport.num_departures);
+      }
+    }
+  }
+
+  return timestep_airports;
+}
+
+std::list<std::string> compute_flight_string(Airport &airport) {
+  std::list<std::string> flight_strings;
+
+  if (airport.adj_list.size() == 0) {
+    std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+    flight_strings.emplace_back(flight_string);
+    return flight_strings;
+  }
+
+  for (Airport* connection : airport.adj_list) {
+    std::list<std::string> new_strings = compute_flight_string(*connection);
+    if (connection->code == airport.code) {
+      flight_strings.merge(new_strings);
+    } else {
+      for (std::string string : new_strings) {
+        std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+        flight_strings.emplace_back(flight_string + ", " + string);
+      }
+    }
+  }
+
+  return flight_strings;
+}
+
+int main(int argc, char *argv[]) {
+  if (argc <= 1) {
+    std::cerr << "Input file missing." << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  //read_routes_file(ROUTES_FILE);
+  std::string input_filename = argv[1];  
+  std::set<int> timesteps;
+  std::map<std::string, Airport> start_airports;
+
+  std::vector<Flight> flights = read_input_file(input_filename, timesteps, start_airports);
+  //std::vector<int> timesteps(timestep_set.begin(), timestep_set.end());
+  std::map<int, std::map<std::string, Airport>> timestep_airports = compute_equigraph(flights, timesteps, start_airports);
+
+  std::set<int>::iterator it;
+  for (it = timesteps.begin(); it != timesteps.end(); it++) {
+    for (auto &pair : timestep_airports[*it]) {
+      std::string code = pair.first;
+      Airport &airport = pair.second;
+      if (airport.num_planes < airport.num_departures) {
+        std::cout << "Flight routing is infeasible with given flights." << std::endl;
+        exit(EXIT_SUCCESS);
+      }
+    }
+  }
+
+  for (auto &pair : start_airports) {
+    Airport &airport = pair.second;
+    std::list<std::string> flight_strings = compute_flight_string(airport);
+    for (std::string flight_string : flight_strings)
+      std::cout << flight_string << std::endl;
+  }
+
+  return 0;
 }
