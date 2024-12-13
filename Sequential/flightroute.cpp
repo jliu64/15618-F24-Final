@@ -7,7 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-//#include <iomanip>
+#include <iomanip>
 #include <chrono>
 
 //#include <unistd.h>
@@ -205,6 +205,8 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
 
+  const auto init_start = std::chrono::steady_clock::now();
+
   //read_routes_file(ROUTES_FILE);
   std::string input_filename = argv[1];  
   std::set<int> timesteps;
@@ -233,5 +235,8 @@ int main(int argc, char *argv[]) {
       std::cout << flight_string << std::endl;
   }
 
+  const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - init_start).count();
+  std::cout << "Computation time (sec): " << std::fixed << std::setprecision(10) << compute_time << '\n';
+  
   return 0;
 }
