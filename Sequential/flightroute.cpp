@@ -94,15 +94,19 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
   return flights;
 }
 
-std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport> &start_airports) {
+std::map<int, std::map<std::string, Airport>> compute_equigraph(
+  std::vector<Flight> &flights,
+  std::set<int> &timesteps,
+  std::map<std::string, Airport> &start_airports
+) {
   std::map<int, std::map<std::string, Airport>> timestep_airports;
   timestep_airports[-1] = start_airports;
-  
+
   // Add edges for flights
-  for (Flight &flight : flights) {
+  for (Flight &flight: flights) {
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
-    
+
     // Initialize departure maps if non-existent
     if (timestep_airports.find(depart_timestep) == timestep_airports.end()) {
       std::map<std::string, Airport> airports;
@@ -110,7 +114,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
     }
     std::map<std::string, Airport> &depart_airports = timestep_airports[depart_timestep];
     if (depart_airports.find(flight.depart_airport) == depart_airports.end()) {
-      std::list<Airport*> adj_list;
+      std::list<Airport *> adj_list;
       depart_airports[flight.depart_airport] = {0, 0, depart_timestep, flight.depart_airport, adj_list};
     }
     depart_airports[flight.depart_airport].num_departures++;
@@ -122,17 +126,21 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
     }
     std::map<std::string, Airport> &arrive_airports = timestep_airports[arrive_timestep];
     if (arrive_airports.find(flight.arrive_airport) == arrive_airports.end()) {
-      std::list<Airport*> adj_list;
+      std::list<Airport *> adj_list;
       arrive_airports[flight.arrive_airport] = {0, 0, arrive_timestep, flight.arrive_airport, adj_list};
     }
     arrive_airports[flight.arrive_airport].num_planes++;
 
-    // Add edge to graph
-    timestep_airports[depart_timestep][flight.depart_airport].adj_list.push_back(&timestep_airports[arrive_timestep][flight.arrive_airport]);
+    // Add edge to graph (flights)
+    printf("[FLIGHT LOOP] Adding edge: %s (timestep %d) -> %s (timestep %d)\n",
+           flight.depart_airport.c_str(), depart_timestep,
+           flight.arrive_airport.c_str(), arrive_timestep);
+    timestep_airports[depart_timestep][flight.depart_airport].adj_list.push_back(
+      &timestep_airports[arrive_timestep][flight.arrive_airport]);
   }
 
   // Add edges for ground connections
-  for (auto &pair : start_airports) {
+  for (auto &pair: start_airports) {
     std::string code = pair.first;
     Airport &airport = pair.second;
     auto it = timesteps.begin();
@@ -148,17 +156,23 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
       }
     }
     std::map<std::string, Airport> &airports = timestep_airports[*it];
+    printf("[GROUND CONNECTION] Adding edge: %s (start) -> %s (timestep %d)\n",
+           code.c_str(), code.c_str(), *it);
     airport.adj_list.push_back(&airports[code]);
     airports[code].num_planes += (airport.num_planes - airport.num_departures);
   }
 
+  // Add edges for timestep-to-timestep ground connections
   std::set<int>::iterator iterator;
   for (iterator = timesteps.begin(); iterator != timesteps.end(); iterator++) {
-    for (auto &pair : timestep_airports[*iterator]) {
+    for (auto &pair: timestep_airports[*iterator]) {
       std::string code = pair.first;
       Airport &airport = pair.second;
       std::set<int>::iterator it = iterator;
+      printf("before it: %d\n", *it);
       it++;
+      if (it == timesteps.end()) break;
+      printf("after it: %d\n", *it);
       if (timestep_airports.find(*it) == timestep_airports.end()) break;
       while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
         it++;
@@ -166,8 +180,39 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
       }
       if (it != timesteps.end()) {
         std::map<std::string, Airport> &airports = timestep_airports[*it];
+        printf("[GROUND TIMESTEP LOOP] Adding edge: %s (timestep %d) -> %s (timestep %d), %d\n",
+               code.c_str(), *iterator, code.c_str(), *it, airports[code].timestep);
+        printf("[GROUND TIMESTEP LOOP] Adding edge: %s (timestep %d) -> %s (timestep %d)\n",
+               airport.code.c_str(), airport.timestep, airports[code].code.c_str(), airports[code].timestep);
         airport.adj_list.push_back(&airports[code]);
         airports[code].num_planes += (airport.num_planes - airport.num_departures);
+      }
+    }
+  }
+
+  // Debug Output: Print the timestep_airports data structure
+  printf("Final Timestep Airports Structure:\n");
+  for (const auto &timestep_pair: timestep_airports) {
+    int timestep = timestep_pair.first;
+    const auto &airports = timestep_pair.second;
+    printf("Timestep: %d\n", timestep);
+    for (const auto &airport_pair: airports) {
+      const std::string &airport_code = airport_pair.first;
+      const Airport &airport = airport_pair.second;
+
+      // Print all fields of the source airport
+      printf("  Airport: %s\n", airport_code.c_str());
+      printf("    num_planes: %d\n", airport.num_planes);
+      printf("    num_departures: %d\n", airport.num_departures);
+      printf("    timestep: %d\n", airport.timestep);
+      printf("    Adjacent Airports:\n");
+
+      // Print all fields of adjacent airports
+      for (const Airport *adj_airport: airport.adj_list) {
+        printf("      -> %s\n", adj_airport->code.c_str());
+        printf("         num_planes: %d\n", adj_airport->num_planes);
+        printf("         num_departures: %d\n", adj_airport->num_departures);
+        printf("         timestep: %d\n", adj_airport->timestep);
       }
     }
   }
@@ -176,6 +221,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
 }
 
 std::list<std::string> compute_flight_string(Airport &airport) {
+  printf("Computing flight string for airport %s at timestep %d\n", airport.code.c_str(), airport.timestep);
   std::list<std::string> flight_strings;
 
   if (airport.adj_list.size() == 0) {
@@ -185,6 +231,7 @@ std::list<std::string> compute_flight_string(Airport &airport) {
   }
 
   for (Airport* connection : airport.adj_list) {
+    printf("  Connection to airport %s at timestep %d\n", connection->code.c_str(), connection->timestep);
     std::list<std::string> new_strings = compute_flight_string(*connection);
     if (connection->code == airport.code) {
       flight_strings.merge(new_strings);
