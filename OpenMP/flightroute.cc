@@ -182,24 +182,54 @@ std::list<std::string> compute_flight_string(Airport &airport) {
   return flight_strings;
 }
 
-
 int main(int argc, char *argv[]) {
-  if (argc <= 1) {
-    std::cerr << "Input file missing." << std::endl;
+  if (argc <= 2) {
+    std::cerr << "Usage: " << argv[0] << " <input_file> <num_threads>" << std::endl;
     exit(EXIT_FAILURE);
   }
 
-  // Input file name
   std::string input_filename = argv[1];
+  int num_threads;
+
+  try {
+    num_threads = std::stoi(argv[2]); // Convert second argument to integer
+    if (num_threads <= 0) {
+      throw std::invalid_argument("Number of threads must be greater than zero.");
+    }
+  } catch (const std::exception &e) {
+    std::cerr << "Invalid number of threads: " << e.what() << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  // Set the number of OpenMP threads
+  omp_set_num_threads(num_threads);
+
+  // Print arguments
+  std::cout << "Input file: " << input_filename << std::endl;
+  std::cout << "Number of threads: " << num_threads << std::endl;
   std::set<int> timesteps;
   std::map<std::string, Airport> start_airports;
 
+  // Start timing input read
+  auto start_read = std::chrono::high_resolution_clock::now();
   // Read input data
   std::vector<Flight> flights = read_input_file(input_filename, timesteps, start_airports);
+  auto end_read = std::chrono::high_resolution_clock::now();
+  std::cout << "Time taken to read input: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_read - start_read).count()
+            << " ms" << std::endl;
 
+  // Start timing graph construction
+  auto start_graph = std::chrono::high_resolution_clock::now();
   // Build the time-expanded flight graph (equigraph)
   auto timestep_airports = compute_equigraph(flights, timesteps, start_airports);
+  auto end_graph = std::chrono::high_resolution_clock::now();
+  std::cout << "Time taken to build graph: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_graph - start_graph).count()
+            << " ms" << std::endl;
 
+  // Start timing validation
+  auto start_validation = std::chrono::high_resolution_clock::now();
   // Validate the graph for feasibility
   for (auto it = timesteps.begin(); it != timesteps.end(); ++it) {
     for (auto &pair: timestep_airports[*it]) {
@@ -210,7 +240,13 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  auto end_validation = std::chrono::high_resolution_clock::now();
+  std::cout << "Time taken for validation: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_validation - start_validation).count()
+            << " ms" << std::endl;
 
+  // Start timing computation of flight strings
+  auto start_compute = std::chrono::high_resolution_clock::now();
   // Prepare a vector of iterators for OpenMP parallelization
   std::vector<std::map<std::string, Airport>::iterator> airport_iterators;
   for (auto it = start_airports.begin(); it != start_airports.end(); ++it) {
@@ -232,6 +268,10 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  auto end_compute = std::chrono::high_resolution_clock::now();
+  std::cout << "Time taken to compute flight strings: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count()
+            << " ms" << std::endl;
 
   return 0;
 }

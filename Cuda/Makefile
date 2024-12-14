@@ -1,5 +1,5 @@
 # Target executable name
-EXECUTABLE := aircraft_route
+EXECUTABLE := flightroute
 
 # CUDA compiler
 NVCC := nvcc
@@ -11,7 +11,7 @@ NVCCFLAGS := -O3 -m64 --gpu-architecture=compute_61 -lineinfo
 LDFLAGS := -L/usr/local/cuda-11.7/lib64/ -lcudart
 
 # Source file
-CU_FILES := aircraft_route.cu
+CU_FILES := flightroute.cu
 
 .PHONY: all clean
 

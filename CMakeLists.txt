@@ -23,8 +23,8 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --gpu-architecture=compute_61")
 
 # Define the source files
 set(SOURCE_FILES
-        Cuda/aircraft_route.cu
         OpenMP/flightroute.cc
+        Cuda/flightroute.cu
 )
 
 # Add the executable

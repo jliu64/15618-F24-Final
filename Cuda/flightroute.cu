@@ -1,236 +1,237 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <chrono>
 #include <vector>
-#include <map>
 #include <set>
-#include <list>
+#include <map>
 #include <string>
-#include <omp.h>
+#include <cuda_runtime.h>
+#include <stdarg.h>
 
-// Include necessary structures and types
-#include "flightroute.h"
+#define MAX_CONNECTIONS 64 // Maximum connections per airport
+#define CODE_SIZE 4        // Airport code size (3 characters + null terminator)
 
-// Read input file and construct initial flight and airport data
-std::vector<Flight>
-read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
+// Structure to store flight data
+struct Flight {
+  char depart_airport[CODE_SIZE];
+  int depart_day;
+  int depart_time;
+  char arrive_airport[CODE_SIZE];
+  int arrive_day;
+  int arrive_time;
+};
+
+// CUDA-compatible airport structure
+struct Airport {
+  int aircraft_count;
+  int timestep;
+  int adj_list_size;
+  char code[CODE_SIZE];
+  Airport *adj_list[MAX_CONNECTIONS];
+};
+
+// Function to read input file
+std::vector<Flight> read_input_file(const std::string &input_filename, std::set<int> &timesteps,
+                                    std::map<std::string, Airport> &airports) {
   std::ifstream fin(input_filename);
-
   if (!fin) {
-    std::cerr << "Unable to open file: " << input_filename << ".\n";
+    std::cerr << "Error: Unable to open file: " << input_filename << std::endl;
     exit(EXIT_FAILURE);
   }
 
-  int num_flights, num_occupied_airports;
-  fin >> num_flights >> num_occupied_airports;
+  int num_flights, num_airports;
+  fin >> num_flights >> num_airports;
 
   std::vector<Flight> flights(num_flights);
 
+  // Read flights
   for (int i = 0; i < num_flights; ++i) {
-    fin >> flights[i].depart_airport >> flights[i].depart_day >> flights[i].depart_time >>
-        flights[i].arrive_airport >> flights[i].arrive_day >> flights[i].arrive_time;
+    fin >> flights[i].depart_airport >> flights[i].depart_day >> flights[i].depart_time
+        >> flights[i].arrive_airport >> flights[i].arrive_day >> flights[i].arrive_time;
 
-    // Convert departure and arrival times to timesteps (discretized into hours)
     int depart_timestep = flights[i].depart_day * 24 + flights[i].depart_time;
     int arrive_timestep = flights[i].arrive_day * 24 + flights[i].arrive_time;
 
     if (depart_timestep >= arrive_timestep) {
-      std::cout << "Flight routing is infeasible with given flights." << std::endl;
-      exit(EXIT_SUCCESS);
+      std::cerr << "Error: Invalid flight with non-positive duration." << std::endl;
+      exit(EXIT_FAILURE);
     }
 
     timesteps.insert(depart_timestep);
     timesteps.insert(arrive_timestep);
   }
 
-  for (int i = 0; i < num_occupied_airports; i++) {
-    std::string airport;
+  // Read airports
+  for (int i = 0; i < num_airports; ++i) {
+    std::string airport_name;
     int aircraft_count;
-    std::list<Airport *> adj_list;
-    fin >> airport >> aircraft_count;
+    fin >> airport_name >> aircraft_count;
 
-    airports[airport] = {aircraft_count, 0, -1, airport, adj_list};
+    Airport airport = {aircraft_count, 0, 0, {0}, {nullptr}};
+    strncpy(airport.code, airport_name.c_str(), CODE_SIZE - 1);
+    airport.code[CODE_SIZE - 1] = '\0';
+    airports[airport_name] = airport;
   }
 
   return flights;
 }
 
-// Build the equigraph (time-expanded flight graph)
-std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps,
+// Create a time-expanded graph for the flights
+std::map<int, std::map<std::string, Airport>> compute_equigraph(const std::vector<Flight> &flights,
+                                                                const std::set<int> &timesteps,
                                                                 std::map<std::string, Airport> &start_airports) {
   std::map<int, std::map<std::string, Airport>> timestep_airports;
   timestep_airports[-1] = start_airports;
 
-  // Add edges for flights
-  for (Flight &flight: flights) {
+  for (const auto &flight: flights) {
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
 
-    // Initialize departure maps if non-existent
-    if (timestep_airports.find(depart_timestep) == timestep_airports.end()) {
-      std::map<std::string, Airport> airports;
-      timestep_airports[depart_timestep] = airports;
-    }
-    std::map<std::string, Airport> &depart_airports = timestep_airports[depart_timestep];
-    if (depart_airports.find(flight.depart_airport) == depart_airports.end()) {
-      std::list<Airport *> adj_list;
-      depart_airports[flight.depart_airport] = {0, 0, depart_timestep, flight.depart_airport, adj_list};
-    }
-    depart_airports[flight.depart_airport].num_departures++;
+    timestep_airports[depart_timestep][flight.depart_airport] = start_airports[flight.depart_airport];
+    timestep_airports[arrive_timestep][flight.arrive_airport] = start_airports[flight.arrive_airport];
 
-    // Initialize arrival maps if non-existent
-    if (timestep_airports.find(arrive_timestep) == timestep_airports.end()) {
-      std::map<std::string, Airport> airports;
-      timestep_airports[arrive_timestep] = airports;
-    }
-    std::map<std::string, Airport> &arrive_airports = timestep_airports[arrive_timestep];
-    if (arrive_airports.find(flight.arrive_airport) == arrive_airports.end()) {
-      std::list<Airport *> adj_list;
-      arrive_airports[flight.arrive_airport] = {0, 0, arrive_timestep, flight.arrive_airport, adj_list};
-    }
-    arrive_airports[flight.arrive_airport].num_planes++;
+    Airport &source = timestep_airports[depart_timestep][flight.depart_airport];
+    Airport &destination = timestep_airports[arrive_timestep][flight.arrive_airport];
 
-    // Add edge to graph
-    timestep_airports[depart_timestep][flight.depart_airport].adj_list.push_back(
-      &timestep_airports[arrive_timestep][flight.arrive_airport]);
-  }
-
-  // Add edges for ground connections
-  for (auto &pair: start_airports) {
-    std::string code = pair.first;
-    Airport &airport = pair.second;
-    auto it = timesteps.begin();
-    if (timestep_airports.find(*it) == timestep_airports.end()) {
-      std::cerr << "Failed to initialize all nodes in graph." << std::endl;
-      exit(EXIT_FAILURE);
-    }
-    while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
-      it++;
-      if (it == timesteps.end()) {
-        std::cerr << "Failed to initialize all timesteps in graph." << std::endl;
-        exit(EXIT_FAILURE);
-      }
-    }
-    std::map<std::string, Airport> &airports = timestep_airports[*it];
-    airport.adj_list.push_back(&airports[code]);
-    airports[code].num_planes += (airport.num_planes - airport.num_departures);
-  }
-
-  std::set<int>::iterator iterator;
-  for (iterator = timesteps.begin(); iterator != timesteps.end(); iterator++) {
-    for (auto &pair: timestep_airports[*iterator]) {
-      std::string code = pair.first;
-      Airport &airport = pair.second;
-      std::set<int>::iterator it = iterator;
-      it++;
-      if (timestep_airports.find(*it) == timestep_airports.end()) break;
-      while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
-        it++;
-        if (it == timesteps.end()) break;
-      }
-      if (it != timesteps.end()) {
-        std::map<std::string, Airport> &airports = timestep_airports[*it];
-        airport.adj_list.push_back(&airports[code]);
-        airports[code].num_planes += (airport.num_planes - airport.num_departures);
-      }
+    if (source.adj_list_size < MAX_CONNECTIONS) {
+      source.adj_list[source.adj_list_size++] = &destination;
     }
   }
 
   return timestep_airports;
 }
 
-// Compute flight chains recursively (parallelized)
-std::list<std::string> compute_flight_string(Airport &airport) {
-  std::list<std::string> flight_strings;
+// Device-compatible snprintf
+__device__ int snprintf_device(char *buffer, int max_len, const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  int len = 0;
 
-  if (airport.adj_list.empty()) {
-    std::string flight_string =
-      airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-    flight_strings.emplace_back(flight_string);
-    return flight_strings;
+  for (const char *p = fmt; *p != '\0' && len < max_len - 1; ++p) {
+    if (*p == '%') {
+      ++p;
+      if (*p == 's') {
+        const char *str = va_arg(args, const char*);
+        while (*str && len < max_len - 1) buffer[len++] = *str++;
+      } else if (*p == 'd') {
+        int value = va_arg(args, int);
+        char temp[16];
+        int idx = 0;
+        if (value < 0) {
+          buffer[len++] = '-';
+          value = -value;
+        }
+        do {
+          temp[idx++] = '0' + value % 10;
+          value /= 10;
+        } while (value > 0);
+        while (idx > 0 && len < max_len - 1) buffer[len++] = temp[--idx];
+      }
+    } else {
+      buffer[len++] = *p;
+    }
   }
 
-  std::vector<Airport *> adj_vector(airport.adj_list.begin(), airport.adj_list.end());
+  buffer[len] = '\0';
+  va_end(args);
+  return len;
+}
 
-  #pragma omp parallel
-  {
-    std::list<std::string> local_flight_strings;
+// Format flight string on the device
+__device__ int format_flight_string(char *buffer, int max_len, const char *code1, int time1,
+                                    const char *code2 = nullptr, int time2 = -1) {
+  int len = snprintf_device(buffer, max_len, "%s:%d:%d", code1, time1 / 24, time1 % 24);
+  if (code2 && time2 >= 0) {
+    len += snprintf_device(buffer + len, max_len - len, " -> %s:%d:%d", code2, time2 / 24, time2 % 24);
+  }
+  return len;
+}
 
-    #pragma omp for nowait
-    for (size_t i = 0; i < adj_vector.size(); ++i) {
-      Airport *connection = adj_vector[i];
-      std::list<std::string> new_strings = compute_flight_string(*connection);
+// Kernel to compute flight strings
+__global__ void
+compute_flight_string_kernel(Airport *airports, int num_airports, char *results, int *offsets, int max_len) {
+  int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= num_airports) return;
 
-      if (connection->code == airport.code) {
-        #pragma omp critical
-        local_flight_strings.merge(new_strings);
-      } else {
-        for (const std::string &string: new_strings) {
-          std::string flight_string =
-            airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-          #pragma omp critical
-          local_flight_strings.emplace_back(flight_string + ", " + string);
-        }
-      }
+  Airport airport = airports[idx];
+  char *res = results + idx * max_len;
+
+  if (airport.adj_list_size == 0) {
+    offsets[idx] = format_flight_string(res, max_len, airport.code, airport.timestep);
+  } else {
+    for (int i = 0; i < airport.adj_list_size; ++i) {
+      Airport *connection = airport.adj_list[i];
+      offsets[idx] = format_flight_string(res, max_len, airport.code, airport.timestep,
+                                          connection->code, connection->timestep);
     }
+  }
+}
 
-    #pragma omp critical
-    flight_strings.merge(local_flight_strings);
+// Host function to compute flight strings using CUDA
+std::vector<std::string> compute_flight_string_cuda(const std::vector<Airport> &airports) {
+  int num_airports = airports.size();
+  const int max_len = 256;
+
+  Airport *d_airports;
+  char *d_results;
+  int *d_offsets;
+
+  cudaMalloc(&d_airports, num_airports * sizeof(Airport));
+  cudaMemcpy(d_airports, airports.data(), num_airports * sizeof(Airport), cudaMemcpyHostToDevice);
+
+  cudaMalloc(&d_results, num_airports * max_len * sizeof(char));
+  cudaMalloc(&d_offsets, num_airports * sizeof(int));
+
+  int threads_per_block = 256;
+  int blocks = (num_airports + threads_per_block - 1) / threads_per_block;
+  compute_flight_string_kernel<<<blocks, threads_per_block>>>(d_airports, num_airports, d_results, d_offsets, max_len);
+
+  cudaDeviceSynchronize();
+
+  std::vector<char> results(num_airports * max_len);
+  std::vector<int> offsets(num_airports);
+
+  cudaMemcpy(results.data(), d_results, num_airports * max_len * sizeof(char), cudaMemcpyDeviceToHost);
+  cudaMemcpy(offsets.data(), d_offsets, num_airports * sizeof(int), cudaMemcpyDeviceToHost);
+
+  cudaFree(d_airports);
+  cudaFree(d_results);
+  cudaFree(d_offsets);
+
+  std::vector<std::string> flight_strings(num_airports);
+  for (int i = 0; i < num_airports; ++i) {
+    flight_strings[i] = std::string(results.data() + i * max_len, offsets[i]);
   }
 
   return flight_strings;
 }
 
-
+// Main function
 int main(int argc, char *argv[]) {
   if (argc <= 1) {
-    std::cerr << "Input file missing." << std::endl;
-    exit(EXIT_FAILURE);
+    std::cerr << "Usage: " << argv[0] << " <input_file>" << std::endl;
+    return EXIT_FAILURE;
   }
 
-  // Input file name
   std::string input_filename = argv[1];
   std::set<int> timesteps;
   std::map<std::string, Airport> start_airports;
 
-  // Read input data
   std::vector<Flight> flights = read_input_file(input_filename, timesteps, start_airports);
+  std::map<int, std::map<std::string, Airport>> timestep_airports = compute_equigraph(flights, timesteps,
+                                                                                      start_airports);
 
-  // Build the time-expanded flight graph (equigraph)
-  auto timestep_airports = compute_equigraph(flights, timesteps, start_airports);
-
-  // Validate the graph for feasibility
-  for (auto it = timesteps.begin(); it != timesteps.end(); ++it) {
-    for (auto &pair: timestep_airports[*it]) {
-      Airport &airport = pair.second;
-      if (airport.num_planes < airport.num_departures) {
-        std::cout << "Flight routing is infeasible with given flights." << std::endl;
-        exit(EXIT_SUCCESS);
-      }
+  std::vector<Airport> airports;
+  for (const auto &pair: timestep_airports) {
+    for (const auto &airport_pair: pair.second) {
+      airports.push_back(airport_pair.second);
     }
   }
 
-  // Prepare a vector of iterators for OpenMP parallelization
-  std::vector<std::map<std::string, Airport>::iterator> airport_iterators;
-  for (auto it = start_airports.begin(); it != start_airports.end(); ++it) {
-    airport_iterators.push_back(it);
-  }
+  std::vector<std::string> flight_strings = compute_flight_string_cuda(airports);
 
-  // Parallel compute flight strings from starting airports
-  #pragma omp parallel for
-  for (size_t i = 0; i < airport_iterators.size(); ++i) {
-    auto it = airport_iterators[i];
-    Airport &airport = it->second;
-    std::list<std::string> flight_strings = compute_flight_string(airport);
-
-    // Thread-safe output of flight strings
-    #pragma omp critical
-    {
-      for (const std::string &flight_string: flight_strings) {
-        std::cout << flight_string << std::endl;
-      }
-    }
+  for (const auto &flight_string: flight_strings) {
+    std::cout << flight_string << std::endl;
   }
 
   return 0;
