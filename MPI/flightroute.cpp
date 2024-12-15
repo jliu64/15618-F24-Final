@@ -281,7 +281,7 @@ std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Fli
     
     int pairs_to_send = adjacent_pairs.size() / 2;
     // Note: Processors arranged in ring; send to right, receive from left, pass messages along after receiving
-    propagate_updates(timestep_airports, adjacent_pairs, batch_size, pairs_to_send, pid, nproc, src, dst, int_send_buf, char_send_buf,
+    propagate_updates_init(timestep_airports, adjacent_pairs, batch_size, pairs_to_send, pid, nproc, src, dst, int_send_buf, char_send_buf,
       int_recv_bufs, char_recv_bufs);
   }
 
@@ -292,7 +292,7 @@ std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Fli
   if ((batches_full && pid >= active_procs) || (!batches_full && pid > active_procs)) {
     // Note: Use batch size 0 since this processor is done with batches, and -pid as offset for unique identifier
     std::vector<Airport*> empty;
-    propagate_updates(timestep_airports, empty, batch_size, 0, -pid, nproc, src, dst, int_send_buf, char_send_buf, int_recv_bufs, char_recv_bufs);
+    propagate_updates_init(timestep_airports, empty, batch_size, 0, -pid, nproc, src, dst, int_send_buf, char_send_buf, int_recv_bufs, char_recv_bufs);
   }
 
   // Clean up
@@ -317,12 +317,10 @@ Repeat until done
 Potentially terrible work balance/distribution if graph is too deep, width is fine, but no way to know how many departures you have
 on connecting flights on the nodes deeper in the graph at the start
 */
-void propagate_updates(int src, int dst, int pid, int nproc, std::size_t* max_flight_string_len, std::size_t* num_flight_strings) {
+void propagate_updates_first(int src, int dst, int pid, int nproc, std::size_t* max_flight_string_len, std::size_t* num_flight_strings,
+    int* send_buf, std::vector<int*> &recv_bufs) {
   MPI_Request send_request;
   std::vector<MPI_Request> recv_requests(nproc);
-  int* send_buf = new int[3];
-  std::vector<int*> recv_bufs(nproc);
-  for (int i = 0; i < nproc; i++) recv_bufs[i] = new int[3];
 
   send_buf[0] = pid;
   send_buf[1] = *max_flight_string_len;
@@ -338,7 +336,7 @@ void propagate_updates(int src, int dst, int pid, int nproc, std::size_t* max_fl
       continue;
     }
 
-    // Update timestep_airports with updates from other processors
+    // Update max length and number of flight strings with updates from other processors
     std::size_t flight_string_len = recv_bufs[i][1];
     std::size_t num_flight_string = recv_bufs[i][2];
     *max_flight_string_len = std::max(*max_flight_string_len, flight_string_len);
@@ -355,10 +353,63 @@ void propagate_updates(int src, int dst, int pid, int nproc, std::size_t* max_fl
       MPI_Wait(&recv_requests[i], MPI_STATUS_IGNORE);
     }
   }
+}
 
-  // Clean up
-  delete[] send_buf;
-  for (int i = 0; i < nproc; i++) delete[] recv_bufs[i];
+// TODO: Send strings from curr_flight_strings to other procs, recved strings add to new_flight_strings
+void propagate_updates_second(int src, int dst, int pid, int nproc, std::size_t max_flight_string_len, std::size_t num_flight_strings,
+    std::list<std::string> &new_flight_strings, std::list<std::string> &curr_flight_strings, int* int_send_buf, std::vector<int*> &int_recv_bufs,
+    char* char_send_buf, std::vector<char*> &char_recv_bufs) {
+  MPI_Request int_send_request;
+  MPI_Request char_send_request;
+  std::vector<MPI_Request> int_recv_requests(nproc);
+  std::vector<MPI_Request> char_recv_requests(nproc);
+
+  int char_idx = 0;
+  int_send_buf[0] = pid;
+  int_send_buf[1] = (int) curr_flight_strings.size();
+  auto it = curr_flight_strings.begin();
+  for (int i = 0; i < int_send_buf[1]; i++) {
+    std::string &str = *(it++);
+    int_send_buf[i + 2] = (int) str.size();
+    for (int j = 0; j < int_send_buf[i + 2]; j++) char_send_buf[char_idx++] = str[j];
+  }
+  MPI_Isend(int_send_buf, num_flight_strings + 2, MPI_INT, dst, 0, MPI_COMM_WORLD, &int_send_request);
+  MPI_Isend(char_send_buf, max_flight_string_len * num_flight_strings, MPI_CHAR, dst, 1, MPI_COMM_WORLD, &char_send_request);
+
+  // Synchronously receive nproc messages from left processor in ring
+  int ignore_idx = -1; // One message will be originally from this processor; identify through pid and ignore
+  for (int i = 0; i < nproc; i++) {
+    MPI_Recv(int_recv_bufs[i], num_flight_strings + 2, MPI_INT, src, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    MPI_Recv(char_recv_bufs[i], max_flight_string_len * num_flight_strings, MPI_CHAR, src, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    if (int_recv_bufs[i][0] == pid) {
+      ignore_idx = i;
+      continue;
+    }
+
+    // Update new_flight_strings with updates from other processors
+    char_idx = 0;
+    int num_new_strings = int_recv_bufs[i][1];
+    for (int j = 0; j < num_new_strings; j++) {
+      int new_string_len = int_recv_bufs[i][j + 2];
+      std::string new_string = "";
+      for (int k = 0; k < new_string_len; k++) new_string += char_recv_bufs[i][char_idx++];
+      new_flight_strings.push_back(new_string);
+    }
+
+    // Pass messages along
+    MPI_Isend(int_recv_bufs[i], num_flight_strings + 2, MPI_INT, dst, 0, MPI_COMM_WORLD, &int_recv_requests[i]);
+    MPI_Isend(char_recv_bufs[i], max_flight_string_len * num_flight_strings, MPI_CHAR, dst, 1, MPI_COMM_WORLD, &char_recv_requests[i]);
+  }
+
+  // Finish asynchronous sends
+  MPI_Wait(&int_send_request, MPI_STATUS_IGNORE);
+  MPI_Wait(&char_send_request, MPI_STATUS_IGNORE);
+  for (int i = 0; i < nproc; i++) {
+    if (i != ignore_idx) {
+      MPI_Wait(&int_recv_requests[i], MPI_STATUS_IGNORE);
+      MPI_Wait(&char_recv_requests[i], MPI_STATUS_IGNORE);
+    }
+  }
 }
 
 // Compute flight strings for a single airport
@@ -385,7 +436,7 @@ std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_s
     flight_strings.emplace_back(flight_string);
   } else {
     // Recursively compute flight strings for each connection
-    for (Airport* connection: airport->adj_list) {
+    for (Airport* &connection: airport->adj_list) {
       std::list<std::string> new_strings = compute_flight_string(connection, visited, max_flight_string_len);
       for (const std::string &string: new_strings) {
         std::string flight_string =
@@ -413,10 +464,15 @@ std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, A
     first_timestep_airports.push_back(airport);
   }
   
-  // Starting airports divided by nproc, no benefits from having more processors than starting airports
-  // Workload distribution may also be imbalanced, difficult to judge due to unknown depth
+  // Propagate stage 1 (max flight string length and num flight strings)
+  // Note: Starting airports divided by nproc, no benefits from having more processors than starting airports
+  // Note 2: Workload distribution may be imbalanced, difficult to judge due to unknown depth
   std::size_t max_flight_string_len = 0;
   std::size_t num_flight_strings = 0;
+  int* send_buf = new int[3];
+  std::vector<int*> recv_bufs(nproc);
+  for (int i = 0; i < nproc; i++) recv_bufs[i] = new int[3];
+
   for (std::size_t i = pid; i < first_timestep_airports.size(); i += nproc) {
     Airport* &airport = first_timestep_airports[i];
     auto visited = std::unordered_set<Airport*>();
@@ -424,8 +480,7 @@ std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, A
     std::list<std::string> airport_flight_strings = compute_flight_string(airport, visited, &max_flight_string_len);
     num_flight_strings = std::max(num_flight_strings, airport_flight_strings.size());
 
-    // Propagate stage 1 (max flight string length and num flight strings)
-    propagate_updates(src, dst, pid, nproc, &max_flight_string_len, &num_flight_strings);
+    propagate_updates_first(src, dst, pid, nproc, &max_flight_string_len, &num_flight_strings, send_buf, recv_bufs);
 
     // Add the flight strings for this airport as a separate list
     all_flight_strings.push_back(std::move(airport_flight_strings));
@@ -434,10 +489,43 @@ std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, A
   // If any processors finish all their batches while other processors are still working, need to continue propagating updates (otherwise the ring breaks)
   int remaining_nodes = first_timestep_airports.size() % nproc;
   if (pid >= remaining_nodes) {
-    propagate_updates(src, dst, pid, nproc, &max_flight_string_len, &num_flight_strings);
+    propagate_updates_first(src, dst, -pid, nproc, &max_flight_string_len, &num_flight_strings, send_buf, recv_bufs);
   }
 
-  // TODO: Propagate stage 2
+  // Clean up stage 1
+  delete[] send_buf;
+  for (int i = 0; i < nproc; i++) delete[] recv_bufs[i];
+
+  // TODO: Propagate stage 2 (actual flight strings)
+  // Note: Potentially huge memory overhead?
+  std::list<std::string> new_flight_strings;
+  int* int_send_buf = new int[num_flight_strings + 2];
+  char* char_send_buf = new char[max_flight_string_len * num_flight_strings];
+  std::vector<int*> int_recv_bufs(nproc);
+  for (int i = 0; i < nproc; i++) int_recv_bufs[i] = new int[num_flight_strings + 2];
+  std::vector<char*> char_recv_bufs(nproc);
+  for (int i = 0; i < nproc; i++) char_recv_bufs[i] = new char[max_flight_string_len * num_flight_strings];
+
+  for (std::list<std::string> &airport_flight_strings : all_flight_strings) {
+    // Currently sends whole list of strings in one msg, can split into multiple if it doesn't fit, but worse communication overhead?
+    propagate_updates_second(src, dst, pid, nproc, max_flight_string_len, num_flight_strings, new_flight_strings, airport_flight_strings,
+      int_send_buf, int_recv_bufs, char_send_buf, char_recv_bufs);
+  }
+
+  // If any processors finish all their batches while other processors are still working, need to continue propagating updates (otherwise the ring breaks)
+  if (pid >= remaining_nodes) {
+    std::list<std::string> empty;
+    propagate_updates_second(src, dst, -pid, nproc, max_flight_string_len, num_flight_strings, new_flight_strings, empty,
+      int_send_buf, int_recv_bufs, char_send_buf, char_recv_bufs);
+  }
+
+  all_flight_strings.push_back(std::move(new_flight_strings));
+
+  // Clean up stage 2
+  delete[] int_send_buf;
+  delete[] char_send_buf;
+  for (int i = 0; i < nproc; i++) delete[] int_recv_bufs[i];
+  for (int i = 0; i < nproc; i++) delete[] char_recv_bufs[i];
 
   return all_flight_strings;
 }
