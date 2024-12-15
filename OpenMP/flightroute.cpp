@@ -242,8 +242,8 @@ int main(int argc, char *argv[]) {
   auto timestep_airports = compute_equigraph(flights, timesteps, start_airports);
   auto end_graph = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken to build graph: "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(end_graph - start_graph).count()
-            << " ms" << std::endl;
+            << std::chrono::duration_cast<std::chrono::duration<double>>(end_graph - start_graph).count()
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Validate the graph for feasibility
   auto start_validation = std::chrono::high_resolution_clock::now();
@@ -258,22 +258,22 @@ int main(int argc, char *argv[]) {
   }
   auto end_validation = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken for validation: "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(end_validation - start_validation).count()
-            << " ms" << std::endl;
+            << std::chrono::duration_cast<std::chrono::duration<double>>(end_validation - start_validation).count()
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Compute the flight strings for all starting airports
   auto start_compute = std::chrono::high_resolution_clock::now();
   std::list<std::list<std::string>> flight_strings = compute_flight_strings(start_airports);
   auto end_compute = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken to compute flight strings: "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count()
-            << " ms" << std::endl;
+            << std::chrono::duration_cast<std::chrono::duration<double>>(end_compute - start_compute).count()
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // End timing the rest of the program
   auto total_end = std::chrono::high_resolution_clock::now();
   std::cout << "Total time taken (excluding input read): "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
-            << " ms" << std::endl;
+            << std::chrono::duration_cast<std::chrono::duration<double>>(total_end - total_start).count()
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Output the flight strings
   //  for (const std::list<std::string> &chains: flight_strings) {

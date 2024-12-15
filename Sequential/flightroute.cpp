@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
 
   std::cout << "Time taken to build graph: "
             << std::chrono::duration_cast<std::chrono::duration<double>>(end_graph - start_graph).count()
-            << std::fixed << std::setprecision(10) << " ms" << std::endl;
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Validate the graph for feasibility
   auto start_validation = std::chrono::high_resolution_clock::now();
@@ -276,7 +276,7 @@ int main(int argc, char *argv[]) {
 
   std::cout << "Time taken for validation: "
             << std::chrono::duration_cast<std::chrono::duration<double>>(end_validation - start_validation).count()
-            << std::fixed << std::setprecision(10) << " ms" << std::endl;
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Compute the flight strings
   auto start_compute = std::chrono::high_resolution_clock::now();
@@ -285,14 +285,14 @@ int main(int argc, char *argv[]) {
 
   std::cout << "Time taken to compute flight strings: "
             << std::chrono::duration_cast<std::chrono::duration<double>>(end_compute - start_compute).count()
-            << std::fixed << std::setprecision(10) << " ms" << std::endl;
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Measure total time
   auto total_end = std::chrono::high_resolution_clock::now();
 
   std::cout << "Total time taken (excluding input read): "
             << std::chrono::duration_cast<std::chrono::duration<double>>(total_end - total_start).count()
-            << std::fixed << std::setprecision(10) << " ms" << std::endl;
+            << std::fixed << std::setprecision(10) << " s" << std::endl;
 
 //  for (const std::list<std::string> &chains: flight_strings) {
 //    for (const std::string &chain: chains) {
