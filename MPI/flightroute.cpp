@@ -80,7 +80,8 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
     if (depart_timestep >= arrive_timestep) {
-      std::cout << "Flight routing is infeasible with given flights." << std::endl;
+      std::cout << "Flight routing is infeasible with given flight: " << flight.depart_airport << ':' << flight.depart_day << ':' << flight.depart_time
+        << ", " << flight.arrive_airport << ':' << flight.arrive_day << ':' << flight.arrive_time << std::endl;
       MPI_Finalize();
       exit(EXIT_SUCCESS);
     }
@@ -101,10 +102,13 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
 }
 
 bool compareAirport(Airport* &a, Airport* &b) {
-  return a->code < b->code;
+  if (a->timestep == b->timestep)
+    return a->code < b->code;
+  return a->timestep < b->timestep;
 }
 
-void propagate_updates(std::map<int, std::map<std::string, Airport*>> &timestep_airports, std::vector<Airport*> &adjacent_pairs,
+/*
+void propagate_updates_init(std::map<int, std::map<std::string, Airport*>> &timestep_airports, std::vector<Airport*> &adjacent_pairs,
     int batch_size, int pairs_to_send, int pid, int nproc, int src, int dst, int* int_send_buf, char* char_send_buf,
     std::vector<int*> &int_recv_bufs, std::vector<char*> &char_recv_bufs) {
   MPI_Request int_send_request, char_send_request;
@@ -176,57 +180,68 @@ void propagate_updates(std::map<int, std::map<std::string, Airport*>> &timestep_
     }
   }
 }
+*/
 
-std::map<int, std::map<std::string, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport*> &start_airports,
+/*
+* Note: Not worth parallelizing with MPI? Propagated updates from other processes would contain info on new Airport nodes and edges; we'd have to
+* initialize local Airport nodes, check if they already exist in the map, and add edges anyway. All of that data is already contained in the Flights
+* and maps that we build, so we wouldn't really receive any new information from the other processes.
+*/ 
+std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport*> &start_airports,
     int pid, int nproc, int batch_size) {
-  std::map<int, std::map<std::string, Airport*>> timestep_airports;
-  timestep_airports[-1] = start_airports;
-
-  std::vector<Airport*> timestep_airport_vector;
+  std::map<std::string, std::map<int, Airport*>> timestep_airports;
   for (auto &pair : start_airports) {
-    Airport &airport = *(pair.second);
-    timestep_airport_vector.push_back(&airport);
+    Airport* a = pair.second;
+    std::map<int, Airport*> new_timestep_map;
+    new_timestep_map[-1] = a;
+    timestep_airports[a->code] = new_timestep_map;
   }
   
   // Add edges for flights
-  /*
-   * Note: Not worth parallelizing with MPI? Propagated updates from other processes would contain info on new Airport nodes; we'd have to
-   * initialize local Airport nodes, check if they already exist in the map, and add edges anyway. All of that data is already contained in the Flights.
-   */ 
   for (Flight &flight : flights) {
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
     
     // Initialize departure maps if non-existent
-    if (timestep_airports.find(depart_timestep) == timestep_airports.end()) {
-      std::map<std::string, Airport*> airports;
-      timestep_airports[depart_timestep] = airports;
+    if (timestep_airports.find(flight.depart_airport) == timestep_airports.end()) {
+      std::map<int, Airport*> airports;
+      timestep_airports[flight.depart_airport] = airports;
     }
-    std::map<std::string, Airport*> &depart_airports = timestep_airports[depart_timestep];
-    if (depart_airports.find(flight.depart_airport) == depart_airports.end()) {
+    std::map<int, Airport*> &depart_airports = timestep_airports[flight.depart_airport];
+    if (depart_airports.find(depart_timestep) == depart_airports.end()) {
       std::list<Airport*> adj_list;
-      depart_airports[flight.depart_airport] = new Airport{0, 0, depart_timestep, flight.depart_airport, adj_list};
-      timestep_airport_vector.push_back(depart_airports[flight.depart_airport]);
+      depart_airports[depart_timestep] = new Airport{0, 0, depart_timestep, flight.depart_airport, adj_list};
     }
-    depart_airports[flight.depart_airport]->num_departures++;
+    depart_airports[depart_timestep]->num_departures++;
 
     // Initialize arrival maps if non-existent
-    if (timestep_airports.find(arrive_timestep) == timestep_airports.end()) {
-      std::map<std::string, Airport*> airports;
-      timestep_airports[arrive_timestep] = airports;
+    if (timestep_airports.find(flight.arrive_airport) == timestep_airports.end()) {
+      std::map<int, Airport*> airports;
+      timestep_airports[flight.arrive_airport] = airports;
     }
-    std::map<std::string, Airport*> &arrive_airports = timestep_airports[arrive_timestep];
-    if (arrive_airports.find(flight.arrive_airport) == arrive_airports.end()) {
+    std::map<int, Airport*> &arrive_airports = timestep_airports[flight.arrive_airport];
+    if (arrive_airports.find(arrive_timestep) == arrive_airports.end()) {
       std::list<Airport*> adj_list;
-      arrive_airports[flight.arrive_airport] = new Airport{0, 0, arrive_timestep, flight.arrive_airport, adj_list};
-      timestep_airport_vector.push_back(arrive_airports[flight.arrive_airport]);
+      arrive_airports[arrive_timestep] = new Airport{0, 0, arrive_timestep, flight.arrive_airport, adj_list};
     }
-    arrive_airports[flight.arrive_airport]->num_planes++;
+    arrive_airports[arrive_timestep]->num_planes++;
 
     // Add edge to graph
-    timestep_airports[depart_timestep][flight.depart_airport]->adj_list.push_back(timestep_airports[arrive_timestep][flight.arrive_airport]);
+    timestep_airports[flight.depart_airport][depart_timestep]->adj_list.push_back(timestep_airports[flight.arrive_airport][arrive_timestep]);
   }
 
+  for (auto &pair : timestep_airports) {
+    std::map<int, Airport*> &timestep_map = pair.second;
+    auto curr = timestep_map.begin();
+    auto prev = curr;
+    while (++curr != timestep_map.end()) {
+      (prev->second)->adj_list.push_back(curr->second);
+      (curr->second)->num_planes += ((prev->second)->num_planes - (prev->second)->num_departures);
+      prev++;
+    }
+  }
+
+  /*
   int src = (pid == 0) ? nproc - 1 : pid - 1;
   int dst = (pid == nproc - 1) ? 0 : pid + 1;
 
@@ -238,6 +253,7 @@ std::map<int, std::map<std::string, Airport*>> compute_equigraph(std::vector<Fli
   for (int i = 0; i < nproc; i++) char_recv_bufs[i] = new char[batch_size * 3];
 
   // Add edges for ground connections
+  // NOTE: Airport nodes for previous timesteps must be computed before nodes for the same airport at later timesteps; same airport cannot be done in parallel
   std::sort(timestep_airport_vector.begin(), timestep_airport_vector.end(), compareAirport);
   for (int i = pid * batch_size; i < timestep_airport_vector.size(); i += nproc * batch_size) {
     int actual_batch_size = std::min(batch_size, (int) timestep_airport_vector.size() - i);
@@ -286,10 +302,21 @@ std::map<int, std::map<std::string, Airport*>> compute_equigraph(std::vector<Fli
     delete[] int_recv_bufs[i];
     delete[] char_recv_bufs[i];
   }
+  */
 
   return timestep_airports;
 }
 
+/*
+Get adj list len for start airports (+1 because they all start at -1 and have len 1, verify)
+Batch inputs for each start airport? Or just have diff procs run on diff start airports? What if imbalanced adj list lens?
+Compute flight strings, first round propagate max string len and num strings
+Each proc gets overall max string len and max num strings
+Second round propagate strings, each proc adds to their total list
+Repeat until done
+Potentially terrible work balance/distribution if graph is too deep, width is fine, but no way to know how many departures you have
+on connecting flights on the nodes deeper in the graph at the start
+*/
 std::list<std::string> compute_flight_string(Airport &airport) {
   std::list<std::string> flight_strings;
 
@@ -330,7 +357,7 @@ int main(int argc, char *argv[]) {
   // Get total number of processes
   MPI_Comm_size(MPI_COMM_WORLD, &nproc);
 
-  const auto init_start = std::chrono::steady_clock::now();
+  
 
   //read_routes_file(ROUTES_FILE);
   std::string input_filename = argv[1];
@@ -361,7 +388,7 @@ int main(int argc, char *argv[]) {
     flight_buf = new int[num_flights * 4];
     flight_char_buf = new char[num_flights * 6];
     timestep_buf = new int[num_timesteps];
-    start_airport_buf = new int[num_start_airports * 3];
+    start_airport_buf = new int[num_start_airports];
     start_airport_char_buf = new char[num_start_airports * 3];
 
     int f = 0;
@@ -389,13 +416,12 @@ int main(int argc, char *argv[]) {
     for (auto &pair : start_airports) {
       Airport &airport = *(pair.second);
       start_airport_buf[sa++] = airport.num_planes;
-      start_airport_buf[sa++] = airport.num_departures;
-      start_airport_buf[sa++] = airport.timestep;
       start_airport_char_buf[sac++] = airport.code[0];
       start_airport_char_buf[sac++] = airport.code[1];
       start_airport_char_buf[sac++] = airport.code[2];
     }
   }
+  const auto init_start = std::chrono::steady_clock::now();
 
   MPI_Bcast(&num_flights, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
   MPI_Bcast(&num_timesteps, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
@@ -405,25 +431,25 @@ int main(int argc, char *argv[]) {
     flight_buf = new int[num_flights * 4];
     flight_char_buf = new char[num_flights * 6];
     timestep_buf = new int[num_timesteps];
-    start_airport_buf = new int[num_start_airports * 3];
+    start_airport_buf = new int[num_start_airports];
     start_airport_char_buf = new char[num_start_airports * 3];
   }
 
   MPI_Bcast(flight_buf, num_flights * 4, MPI_INT, ROOT, MPI_COMM_WORLD);
   MPI_Bcast(flight_char_buf, num_flights * 6, MPI_CHAR, ROOT, MPI_COMM_WORLD);
   MPI_Bcast(timestep_buf, num_timesteps, MPI_INT, ROOT, MPI_COMM_WORLD);
-  MPI_Bcast(start_airport_buf, num_start_airports * 3, MPI_INT, ROOT, MPI_COMM_WORLD);
+  MPI_Bcast(start_airport_buf, num_start_airports, MPI_INT, ROOT, MPI_COMM_WORLD);
   MPI_Bcast(start_airport_char_buf, num_start_airports * 3, MPI_CHAR, ROOT, MPI_COMM_WORLD);
 
   if (pid != ROOT) {
     for (int i = 0; i < num_timesteps; i++)
       timesteps.insert(timestep_buf[i]);
     
-    for (int i = 0; i < num_start_airports * 3; i += 3) {
-      std::string code{start_airport_char_buf[i], start_airport_char_buf[i+1], start_airport_char_buf[i+2]};
+    for (int i = 0; i < num_start_airports; i++) {
+      std::string code{start_airport_char_buf[i*3], start_airport_char_buf[i*3+1], start_airport_char_buf[i*3+2]};
       int num_planes = start_airport_buf[i];
-      int num_departures = start_airport_buf[i+1];
-      int timestep = start_airport_buf[i+2];
+      int num_departures = 0;
+      int timestep = -1;
       std::list<Airport*> adj_list;
       start_airports[code] = new Airport{num_planes, num_departures, timestep, code, adj_list};
     }
@@ -447,28 +473,30 @@ int main(int argc, char *argv[]) {
   delete[] start_airport_buf;
   delete[] start_airport_char_buf;
 
-  //std::vector<int> timesteps(timestep_set.begin(), timestep_set.end());
-  std::map<int, std::map<std::string, Airport*>> timestep_airports = compute_equigraph(flights, timesteps, start_airports, pid, nproc, batch_size);
+  std::map<std::string, std::map<int, Airport*>> timestep_airports = compute_equigraph(flights, timesteps, start_airports, pid, nproc, batch_size);
 
+  /*
   std::set<int>::iterator it;
   for (it = timesteps.begin(); it != timesteps.end(); it++) {
     for (auto &pair : timestep_airports[*it]) {
       std::string code = pair.first;
       Airport &airport = *(pair.second);
       if (airport.num_planes < airport.num_departures) {
+        std::cout << "timestamp: " << *it << " airport: " << airport.code << " planes: " << airport.num_planes
+                  << " departures: " << airport.num_departures << std::endl;
         std::cout << "Flight routing is infeasible with given flights." << std::endl;
         MPI_Finalize();
         exit(EXIT_SUCCESS);
       }
     }
-  }
+  }*/
 
   if (pid == ROOT) { // TODO: COMPLETE PARALLELIZATION FOR DFS
     for (auto &pair : start_airports) {
       Airport &airport = *(pair.second);
       std::list<std::string> flight_strings = compute_flight_string(airport);
-      for (std::string flight_string : flight_strings)
-        std::cout << flight_string << std::endl;
+      //for (std::string flight_string : flight_strings)
+      //  std::cout << flight_string << std::endl;
     }
   }
 
