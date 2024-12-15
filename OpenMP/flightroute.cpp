@@ -1,20 +1,18 @@
+/**
+ * Parallel Flight Routing (Sequential Version)
+ * Jesse Liu (jzliu), Oscar Han (Enxuh)
+ */
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <iomanip>
 #include <chrono>
-#include <vector>
-#include <map>
-#include <set>
-#include <list>
-#include <string>
 #include <omp.h>
 
-// Include necessary structures and types
 #include "flightroute.h"
 
-// Read input file and construct initial flight and airport data
-std::vector<Flight>
-read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
+std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
   std::ifstream fin(input_filename);
 
   if (!fin) {
@@ -26,20 +24,19 @@ read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<
   fin >> num_flights >> num_occupied_airports;
 
   std::vector<Flight> flights(num_flights);
+  //std::vector occupancy(dim_y, std::vector<int>(dim_x));
 
-  for (int i = 0; i < num_flights; ++i) {
-    fin >> flights[i].depart_airport >> flights[i].depart_day >> flights[i].depart_time >>
-        flights[i].arrive_airport >> flights[i].arrive_day >> flights[i].arrive_time;
-
-    // Convert departure and arrival times to timesteps (discretized into hours)
-    int depart_timestep = flights[i].depart_day * 24 + flights[i].depart_time;
-    int arrive_timestep = flights[i].arrive_day * 24 + flights[i].arrive_time;
-
+  for (auto& flight : flights) {
+    fin >> flight.depart_airport >> flight.depart_day >> flight.depart_time >>
+      flight.arrive_airport >> flight.arrive_day >> flight.arrive_time;
+    
+    // Note: Timesteps discretized into hours
+    int depart_timestep = flight.depart_day * 24 + flight.depart_time;
+    int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
     if (depart_timestep >= arrive_timestep) {
       std::cout << "Flight routing is infeasible with given flights." << std::endl;
       exit(EXIT_SUCCESS);
     }
-
     timesteps.insert(depart_timestep);
     timesteps.insert(arrive_timestep);
   }
@@ -47,7 +44,7 @@ read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<
   for (int i = 0; i < num_occupied_airports; i++) {
     std::string airport;
     int aircraft_count;
-    std::list<Airport *> adj_list;
+    std::list<Airport*> adj_list;
     fin >> airport >> aircraft_count;
 
     airports[airport] = {aircraft_count, 0, -1, airport, adj_list};
@@ -56,9 +53,11 @@ read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<
   return flights;
 }
 
-// Build the equigraph (time-expanded flight graph)
-std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps,
-                                                                std::map<std::string, Airport> &start_airports) {
+std::map<int, std::map<std::string, Airport>> compute_equigraph(
+  std::vector<Flight> &flights,
+  std::set<int> &timesteps,
+  std::map<std::string, Airport> &start_airports
+) {
   std::map<int, std::map<std::string, Airport>> timestep_airports;
   timestep_airports[-1] = start_airports;
 
@@ -91,7 +90,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
     }
     arrive_airports[flight.arrive_airport].num_planes++;
 
-    // Add edge to graph
+    // Add edge to graph (flights)
     timestep_airports[depart_timestep][flight.depart_airport].adj_list.push_back(
       &timestep_airports[arrive_timestep][flight.arrive_airport]);
   }
@@ -117,6 +116,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
     airports[code].num_planes += (airport.num_planes - airport.num_departures);
   }
 
+  // Add edges for timestep-to-timestep ground connections
   std::set<int>::iterator iterator;
   for (iterator = timesteps.begin(); iterator != timesteps.end(); iterator++) {
     for (auto &pair: timestep_airports[*iterator]) {
@@ -124,6 +124,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
       Airport &airport = pair.second;
       std::set<int>::iterator it = iterator;
       it++;
+      if (it == timesteps.end()) break;
       if (timestep_airports.find(*it) == timestep_airports.end()) break;
       while (timestep_airports[*it].find(code) == timestep_airports[*it].end()) {
         it++;
@@ -140,10 +141,11 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flig
   return timestep_airports;
 }
 
-// Compute flight chains recursively (parallelized)
-std::list<std::string> compute_flight_string(Airport &airport) {
+// Recursive helper function for computing flight strings
+std::list<std::string> compute_flight_string_recursive(Airport &airport) {
   std::list<std::string> flight_strings;
 
+  // Base case: If the airport has no outgoing connections
   if (airport.adj_list.empty()) {
     std::string flight_string =
       airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
@@ -151,35 +153,53 @@ std::list<std::string> compute_flight_string(Airport &airport) {
     return flight_strings;
   }
 
-  std::vector<Airport *> adj_vector(airport.adj_list.begin(), airport.adj_list.end());
+  // Recursive case: Explore all outgoing connections
+  for (Airport *connection: airport.adj_list) {
+    std::list<std::string> new_strings = compute_flight_string_recursive(*connection);
 
-  #pragma omp parallel
-  {
-    std::list<std::string> local_flight_strings;
-
-    #pragma omp for nowait
-    for (size_t i = 0; i < adj_vector.size(); ++i) {
-      Airport *connection = adj_vector[i];
-      std::list<std::string> new_strings = compute_flight_string(*connection);
-
-      if (connection->code == airport.code) {
-        #pragma omp critical
-        local_flight_strings.merge(new_strings);
-      } else {
-        for (const std::string &string: new_strings) {
-          std::string flight_string =
-            airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-          #pragma omp critical
-          local_flight_strings.emplace_back(flight_string + ", " + string);
-        }
+    if (connection->code == airport.code) {
+      // If it's a self-loop, just merge the strings
+      flight_strings.merge(new_strings);
+    } else {
+      // Otherwise, prepend the current airport's flight details
+      for (const std::string &string: new_strings) {
+        std::string flight_string =
+          airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+        flight_strings.emplace_back(flight_string + ", " + string);
       }
     }
-
-    #pragma omp critical
-    flight_strings.merge(local_flight_strings);
   }
 
   return flight_strings;
+}
+
+// Parallelized function to compute flight strings for all starting airports
+std::list<std::string> compute_flight_strings(const std::map<std::string, Airport> &start_airports) {
+  std::list<std::string> all_flight_strings;
+
+  // Prepare a thread-safe vector of results
+  std::vector<std::list<std::string>> thread_results(start_airports.size());
+
+  // Parallelize over the starting airports
+  #pragma omp parallel for
+  for (size_t i = 0; i < start_airports.size(); ++i) {
+    auto it = std::next(start_airports.begin(), i); // Access the i-th element of the map
+    const std::string &code = it->first;
+    Airport &airport = const_cast<Airport &>(it->second); // Avoid const for recursive processing
+
+    // Compute the flight strings for the current airport
+    std::list<std::string> flight_strings = compute_flight_string_recursive(airport);
+
+    // Store the result in the thread-local container
+    thread_results[i] = std::move(flight_strings);
+  }
+
+  // Merge all thread-local results into a single list
+  for (const auto &result: thread_results) {
+    all_flight_strings.insert(all_flight_strings.end(), result.begin(), result.end());
+  }
+
+  return all_flight_strings;
 }
 
 int main(int argc, char *argv[]) {
@@ -189,10 +209,9 @@ int main(int argc, char *argv[]) {
   }
 
   std::string input_filename = argv[1];
-  int num_threads;
-
+  size_t num_threads;
   try {
-    num_threads = std::stoi(argv[2]); // Convert second argument to integer
+    num_threads = std::stoi(argv[2]);
     if (num_threads <= 0) {
       throw std::invalid_argument("Number of threads must be greater than zero.");
     }
@@ -200,37 +219,28 @@ int main(int argc, char *argv[]) {
     std::cerr << "Invalid number of threads: " << e.what() << std::endl;
     exit(EXIT_FAILURE);
   }
-
-  // Set the number of OpenMP threads
-  omp_set_num_threads(num_threads);
-
-  // Print arguments
   std::cout << "Input file: " << input_filename << std::endl;
   std::cout << "Number of threads: " << num_threads << std::endl;
+  omp_set_num_threads(num_threads);
+
+  // Read input data
   std::set<int> timesteps;
   std::map<std::string, Airport> start_airports;
-
-  // Start timing input read
-  auto start_read = std::chrono::high_resolution_clock::now();
-  // Read input data
   std::vector<Flight> flights = read_input_file(input_filename, timesteps, start_airports);
-  auto end_read = std::chrono::high_resolution_clock::now();
-  std::cout << "Time taken to read input: "
-            << std::chrono::duration_cast<std::chrono::milliseconds>(end_read - start_read).count()
-            << " ms" << std::endl;
 
-  // Start timing graph construction
-  auto start_graph = std::chrono::high_resolution_clock::now();
+  // Start timing the rest of the program
+  auto total_start = std::chrono::high_resolution_clock::now();
+
   // Build the time-expanded flight graph (equigraph)
+  auto start_graph = std::chrono::high_resolution_clock::now();
   auto timestep_airports = compute_equigraph(flights, timesteps, start_airports);
   auto end_graph = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken to build graph: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(end_graph - start_graph).count()
             << " ms" << std::endl;
 
-  // Start timing validation
-  auto start_validation = std::chrono::high_resolution_clock::now();
   // Validate the graph for feasibility
+  auto start_validation = std::chrono::high_resolution_clock::now();
   for (auto it = timesteps.begin(); it != timesteps.end(); ++it) {
     for (auto &pair: timestep_airports[*it]) {
       Airport &airport = pair.second;
@@ -245,33 +255,24 @@ int main(int argc, char *argv[]) {
             << std::chrono::duration_cast<std::chrono::milliseconds>(end_validation - start_validation).count()
             << " ms" << std::endl;
 
-  // Start timing computation of flight strings
+  // Compute the flight strings for all starting airports
   auto start_compute = std::chrono::high_resolution_clock::now();
-  // Prepare a vector of iterators for OpenMP parallelization
-  std::vector<std::map<std::string, Airport>::iterator> airport_iterators;
-  for (auto it = start_airports.begin(); it != start_airports.end(); ++it) {
-    airport_iterators.push_back(it);
-  }
-
-  // Parallel compute flight strings from starting airports
-  #pragma omp parallel for
-  for (size_t i = 0; i < airport_iterators.size(); ++i) {
-    auto it = airport_iterators[i];
-    Airport &airport = it->second;
-    std::list<std::string> flight_strings = compute_flight_string(airport);
-
-    // Thread-safe output of flight strings
-    #pragma omp critical
-    {
-      for (const std::string &flight_string: flight_strings) {
-        std::cout << flight_string << std::endl;
-      }
-    }
-  }
+  std::list<std::string> flight_strings = compute_flight_strings(start_airports);
   auto end_compute = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken to compute flight strings: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count()
             << " ms" << std::endl;
+
+  // End timing the rest of the program
+  auto total_end = std::chrono::high_resolution_clock::now();
+  std::cout << "Total time taken (excluding input read): "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
+            << " ms" << std::endl;
+
+  // Output the flight strings
+//  for (const std::string &flight_string: flight_strings) {
+//    std::cout << flight_string << std::endl;
+//  }
 
   return 0;
 }
