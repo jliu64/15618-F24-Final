@@ -8,6 +8,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <unordered_set>
 
 #include "flightroute.h"
 
@@ -46,7 +47,8 @@ std::vector<std::vector<std::string>> read_routes_file(std::string &input_filena
   return route_data;
 }
 
-std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
+std::vector<Flight>
+read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports) {
   std::ifstream fin(input_filename);
 
   if (!fin) {
@@ -59,16 +61,17 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
 
   std::vector<Flight> flights(num_flights);
 
-  for (auto& flight : flights) {
+  for (auto &flight: flights) {
     fin >> flight.depart_airport >> flight.depart_day >> flight.depart_time >>
-      flight.arrive_airport >> flight.arrive_day >> flight.arrive_time;
-    
+        flight.arrive_airport >> flight.arrive_day >> flight.arrive_time;
+
     // Note: Timesteps discretized into hours
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
     if (depart_timestep >= arrive_timestep) {
-      std::cout << "Flight data: " << flight.depart_airport << " " << flight.depart_day << " " << flight.depart_time << " "
-          << flight.arrive_airport << " " << flight.arrive_day << " " << flight.arrive_time << std::endl;
+      std::cout << "Flight data: " << flight.depart_airport << " " << flight.depart_day << " " << flight.depart_time
+                << " "
+                << flight.arrive_airport << " " << flight.arrive_day << " " << flight.arrive_time << std::endl;
       std::cout << "Flight routing is infeasible with given flights." << std::endl;
       exit(EXIT_SUCCESS);
     }
@@ -79,7 +82,7 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
   for (int i = 0; i < num_occupied_airports; i++) {
     std::string airport;
     int aircraft_count;
-    std::list<Airport*> adj_list;
+    std::list<Airport *> adj_list;
     fin >> airport >> aircraft_count;
 
     airports[airport] = {aircraft_count, 0, -1, airport, adj_list};
@@ -177,23 +180,34 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(
 }
 
 // Compute flight strings for a single airport
-std::list<std::string> compute_flight_string(Airport &airport) {
+std::list<std::string> compute_flight_string(Airport &airport, std::unordered_set<Airport *> &visited) {
   std::list<std::string> flight_strings;
 
-  if (airport.adj_list.size() == 0) {
-    std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+  // Check if the airport has already been visited
+  if (visited.find(&airport) != visited.end()) {
+    std::string flight_string =
+      airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
     flight_strings.emplace_back(flight_string);
-    return flight_strings;
+    return flight_strings; // Return an empty list to prevent cycles
   }
 
-  for (Airport* connection : airport.adj_list) {
-    std::list<std::string> new_strings = compute_flight_string(*connection);
-    if (connection->code == airport.code) {
-      flight_strings.merge(new_strings);
-    } else {
-      for (std::string string : new_strings) {
-        std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-        flight_strings.emplace_back(flight_string + ", " + string);
+  // Mark the current airport as visited
+  visited.insert(&airport);
+
+  // If no adjacent airports, this is a terminal node
+  if (airport.adj_list.empty()) {
+    std::string flight_string =
+      airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+    flight_strings.emplace_back(flight_string);
+  } else {
+    // Recursively compute flight strings for each connection
+    for (Airport *connection: airport.adj_list) {
+      std::list<std::string> new_strings = compute_flight_string(*connection, visited);
+      for (const std::string &string: new_strings) {
+        std::string flight_string =
+          airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24) +
+          " -> " + string;
+        flight_strings.emplace_back(flight_string);
       }
     }
   }
@@ -202,16 +216,17 @@ std::list<std::string> compute_flight_string(Airport &airport) {
 }
 
 // Compute flight strings for all airports
-std::list<std::string> compute_flight_strings(std::map<std::string, Airport> &airports) {
-  std::list<std::string> all_flight_strings;
+std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, Airport> &airports) {
+  std::list<std::list<std::string>> all_flight_strings;
 
   // Iterate over each airport and call the original compute_flight_string
   for (auto &pair: airports) {
     Airport &airport = pair.second;
-    std::list<std::string> airport_flight_strings = compute_flight_string(airport);
+    auto visited = std::unordered_set<Airport *>();
+    std::list<std::string> airport_flight_strings = compute_flight_string(airport, visited);
 
-    // Append the results for this airport to the final list
-    all_flight_strings.insert(all_flight_strings.end(), airport_flight_strings.begin(), airport_flight_strings.end());
+    // Add the flight strings for this airport as a separate list
+    all_flight_strings.push_back(std::move(airport_flight_strings));
   }
 
   return all_flight_strings;
@@ -279,9 +294,14 @@ int main(int argc, char *argv[]) {
             << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
             << " ms" << std::endl;
 
-//  for (const std::string &flight_string: flight_strings) {
-//    std::cout << flight_string << std::endl;
-//  }
+  for (const std::list<std::string> &chains: flight_strings) {
+    for (const std::string &chain: chains) {
+      std::cout << chain << std::endl;
+    }
+    std::cout
+      << "-------------------------------------------------------------------------------------------------------------------------------------"
+      << std::endl;
+  }
 
   return EXIT_SUCCESS;
 }
