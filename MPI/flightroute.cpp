@@ -496,7 +496,7 @@ std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, A
   delete[] send_buf;
   for (int i = 0; i < nproc; i++) delete[] recv_bufs[i];
 
-  // Propagate stage 2 (actual flight strings)
+  // Propagate stage 2 (actual flight strings), not necessary if we just want to print out all flight strings
   // Note: Potentially huge memory overhead?
   std::list<std::string> new_flight_strings;
   int* int_send_buf = new int[num_flight_strings + 2];
