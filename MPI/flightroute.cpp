@@ -188,7 +188,7 @@ void propagate_updates_init(std::map<int, std::map<std::string, Airport*>> &time
 * initialize local Airport nodes, check if they already exist in the map, and add edges anyway. All of that data is already contained in the Flights
 * and maps that we build, so we wouldn't really receive any new information from the other processes.
 */ 
-std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport*> &start_airports) {
+std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::map<std::string, Airport*> &start_airports) {
   std::map<std::string, std::map<int, Airport*>> timestep_airports;
   for (auto &pair : start_airports) {
     Airport* a = pair.second;
@@ -308,7 +308,7 @@ std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Fli
 }
 
 /*
-Get adj list len for start airports (+1 because they all start at -1 and have len 1, verify)
+Get adj list len for start airports (+1 because they all start at -1 and have len 1)
 Batch inputs for each start airport? Or just have diff procs run on diff start airports? What if imbalanced adj list lens?
 Compute flight strings, first round propagate max string len and num strings
 Each proc gets overall max string len and max num strings
@@ -317,9 +317,52 @@ Repeat until done
 Potentially terrible work balance/distribution if graph is too deep, width is fine, but no way to know how many departures you have
 on connecting flights on the nodes deeper in the graph at the start
 */
+void propagate_updates(int src, int dst, int pid, int nproc, std::size_t* max_flight_string_len, std::size_t* num_flight_strings) {
+  MPI_Request send_request;
+  std::vector<MPI_Request> recv_requests(nproc);
+  int* send_buf = new int[3];
+  std::vector<int*> recv_bufs(nproc);
+  for (int i = 0; i < nproc; i++) recv_bufs[i] = new int[3];
+
+  send_buf[0] = pid;
+  send_buf[1] = *max_flight_string_len;
+  send_buf[2] = *num_flight_strings;
+  MPI_Isend(send_buf, 3, MPI_INT, dst, 0, MPI_COMM_WORLD, &send_request);
+
+  // Synchronously receive nproc messages from left processor in ring
+  int ignore_idx = -1; // One message will be originally from this processor; identify through pid and ignore
+  for (int i = 0; i < nproc; i++) {
+    MPI_Recv(recv_bufs[i], 3, MPI_INT, src, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    if (recv_bufs[i][0] == pid) {
+      ignore_idx = i;
+      continue;
+    }
+
+    // Update timestep_airports with updates from other processors
+    std::size_t flight_string_len = recv_bufs[i][1];
+    std::size_t num_flight_string = recv_bufs[i][2];
+    *max_flight_string_len = std::max(*max_flight_string_len, flight_string_len);
+    *num_flight_strings = std::max(*num_flight_strings, num_flight_string);
+
+    // Pass messages along
+    MPI_Isend(recv_bufs[i], 3, MPI_INT, dst, 0, MPI_COMM_WORLD, &recv_requests[i]);
+  }
+
+  // Finish asynchronous sends
+  MPI_Wait(&send_request, MPI_STATUS_IGNORE);
+  for (int i = 0; i < nproc; i++) {
+    if (i != ignore_idx) {
+      MPI_Wait(&recv_requests[i], MPI_STATUS_IGNORE);
+    }
+  }
+
+  // Clean up
+  delete[] send_buf;
+  for (int i = 0; i < nproc; i++) delete[] recv_bufs[i];
+}
 
 // Compute flight strings for a single airport
-std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_set<Airport*> &visited) {
+std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_set<Airport*> &visited, std::size_t* max_flight_string_len) {
   std::list<std::string> flight_strings;
 
   // Check if the airport has already been visited
@@ -327,6 +370,7 @@ std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_s
     std::string flight_string =
       airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24);
     flight_strings.emplace_back(flight_string);
+    *max_flight_string_len = std::max(*max_flight_string_len, flight_string.length());
     return flight_strings; // Return an empty list to prevent cycles
   }
 
@@ -337,15 +381,17 @@ std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_s
   if (airport->adj_list.empty()) {
     std::string flight_string =
       airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24);
+    *max_flight_string_len = std::max(*max_flight_string_len, flight_string.length());
     flight_strings.emplace_back(flight_string);
   } else {
     // Recursively compute flight strings for each connection
     for (Airport* connection: airport->adj_list) {
-      std::list<std::string> new_strings = compute_flight_string(connection, visited);
+      std::list<std::string> new_strings = compute_flight_string(connection, visited, max_flight_string_len);
       for (const std::string &string: new_strings) {
         std::string flight_string =
           airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24) +
           " -> " + string;
+        *max_flight_string_len = std::max(*max_flight_string_len, flight_string.length());
         flight_strings.emplace_back(flight_string);
       }
     }
@@ -355,24 +401,49 @@ std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_s
 }
 
 // Compute flight strings for all airports
-std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, Airport*> &airports) {
+std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, Airport*> &airports, int pid, int nproc) {
   std::list<std::list<std::string>> all_flight_strings;
+  int src = (pid == 0) ? nproc - 1 : pid - 1;
+  int dst = (pid == nproc - 1) ? 0 : pid + 1;
 
-  // Iterate over each airport and call the original compute_flight_string
-  for (auto &pair: airports) {
-    Airport* &airport = pair.second;
+  // Add starting airports to a vector, in order to divide among processors
+  std::vector<Airport*> first_timestep_airports;
+  for (auto &pair : airports) {
+    Airport* &airport = pair.second->adj_list.front(); // Note: Starting airport has timestep -1, adjacency list always goes solely to copy at next relevant timestep
+    first_timestep_airports.push_back(airport);
+  }
+  
+  // Starting airports divided by nproc, no benefits from having more processors than starting airports
+  // Workload distribution may also be imbalanced, difficult to judge due to unknown depth
+  std::size_t max_flight_string_len = 0;
+  std::size_t num_flight_strings = 0;
+  for (std::size_t i = pid; i < first_timestep_airports.size(); i += nproc) {
+    Airport* &airport = first_timestep_airports[i];
     auto visited = std::unordered_set<Airport*>();
-    std::list<std::string> airport_flight_strings = compute_flight_string(airport, visited);
+    
+    std::list<std::string> airport_flight_strings = compute_flight_string(airport, visited, &max_flight_string_len);
+    num_flight_strings = std::max(num_flight_strings, airport_flight_strings.size());
+
+    // Propagate stage 1 (max flight string length and num flight strings)
+    propagate_updates(src, dst, pid, nproc, &max_flight_string_len, &num_flight_strings);
 
     // Add the flight strings for this airport as a separate list
     all_flight_strings.push_back(std::move(airport_flight_strings));
   }
 
+  // If any processors finish all their batches while other processors are still working, need to continue propagating updates (otherwise the ring breaks)
+  int remaining_nodes = first_timestep_airports.size() % nproc;
+  if (pid >= remaining_nodes) {
+    propagate_updates(src, dst, pid, nproc, &max_flight_string_len, &num_flight_strings);
+  }
+
+  // TODO: Propagate stage 2
+
   return all_flight_strings;
 }
 
 int main(int argc, char *argv[]) {
-  if (argc <= 2) {
+  if (argc <= 1) {
     std::cerr << "Inputs missing." << std::endl;
     exit(EXIT_FAILURE);
   }
@@ -392,7 +463,6 @@ int main(int argc, char *argv[]) {
 
   //read_routes_file(ROUTES_FILE);
   std::string input_filename = argv[1];
-  int batch_size = std::stoi(argv[2]);
   int num_flights;
   int num_timesteps;
   int num_start_airports;
@@ -408,7 +478,6 @@ int main(int argc, char *argv[]) {
   if (pid == ROOT) {
     std::cout << "Number of processes: " << nproc << std::endl;
     std::cout << "Input file: " << input_filename << std::endl;
-    std::cout << "Batch size: " << batch_size << std::endl;
 
     flights = read_input_file(input_filename, timesteps, start_airports);
 
@@ -509,7 +578,7 @@ int main(int argc, char *argv[]) {
   }
 
   const auto graph_start = std::chrono::high_resolution_clock::now();
-  std::map<std::string, std::map<int, Airport*>> timestep_airports = compute_equigraph(flights, timesteps, start_airports);
+  std::map<std::string, std::map<int, Airport*>> timestep_airports = compute_equigraph(flights, start_airports);
   if (pid == ROOT) {
     const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - graph_start).count();
     std::cout << "Graph construction time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
@@ -537,7 +606,7 @@ int main(int argc, char *argv[]) {
 
   // Compute the flight strings
   const auto compute_start = std::chrono::high_resolution_clock::now();
-  std::list<std::list<std::string>> flight_strings = compute_flight_strings(start_airports);
+  std::list<std::list<std::string>> flight_strings = compute_flight_strings(start_airports, pid, nproc);
   if (pid == ROOT) {
     const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - compute_start).count();
     std::cout << "Flight strings computation time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
