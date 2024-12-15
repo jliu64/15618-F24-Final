@@ -294,14 +294,14 @@ int main(int argc, char *argv[]) {
             << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
             << " ms" << std::endl;
 
-  for (const std::list<std::string> &chains: flight_strings) {
-    for (const std::string &chain: chains) {
-      std::cout << chain << std::endl;
-    }
-    std::cout
-      << "-------------------------------------------------------------------------------------------------------------------------------------"
-      << std::endl;
-  }
+//  for (const std::list<std::string> &chains: flight_strings) {
+//    for (const std::string &chain: chains) {
+//      std::cout << chain << std::endl;
+//    }
+//    std::cout
+//      << "-------------------------------------------------------------------------------------------------------------------------------------"
+//      << std::endl;
+//  }
 
   return EXIT_SUCCESS;
 }
