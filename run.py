@@ -9,18 +9,21 @@ OPENMP_EXECUTABLE = "./OpenMP/flightroute"
 # Define input and output paths
 INPUT_FOLDER = "Inputs"
 OUTPUT_FOLDER = "Outputs"
+SEQ_OUTPUT_FOLDER = os.path.join(OUTPUT_FOLDER, "Sequential")
+OMP_OUTPUT_FOLDER = os.path.join(OUTPUT_FOLDER, "OpenMP")
 
 # List of horizons and thread counts
 HORIZONS = [5, 7, 10, 15, 30]
 THREAD_COUNTS = [2, 4, 8, 16, 32, 64, 128]
 
-# Create Outputs folder if it doesn't exist
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+# Create necessary output folders if they don't exist
+os.makedirs(SEQ_OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(OMP_OUTPUT_FOLDER, exist_ok=True)
 
 
 def run_sequential(horizon):
     input_file = f"{INPUT_FOLDER}/data_{horizon}.txt"
-    output_file = f"{OUTPUT_FOLDER}/seq_{horizon}.txt"
+    output_file = f"{SEQ_OUTPUT_FOLDER}/seq_{horizon}.txt"
 
     try:
         print(f"Running Sequential for H={horizon}...")
@@ -38,7 +41,7 @@ def run_sequential(horizon):
 
 def run_openmp(horizon, threads):
     input_file = f"{INPUT_FOLDER}/data_{horizon}.txt"
-    output_file = f"{OUTPUT_FOLDER}/openmp_{horizon}_{threads}.txt"
+    output_file = f"{OMP_OUTPUT_FOLDER}/openmp_{horizon}_{threads}.txt"
 
     try:
         print(f"Running OpenMP for H={horizon} with {threads} threads...")
