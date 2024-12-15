@@ -27,15 +27,13 @@ def run_sequential(horizon):
         result = subprocess.run(
             [SEQUENTIAL_EXECUTABLE, input_file],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
+            stderr=subprocess.PIPE
         )
         with open(output_file, "w") as f:
-            f.write(result.stdout)
+            f.write(result.stdout.decode('utf-8'))  # Decode bytes to string for compatibility
         print(f"Sequential output saved to {output_file}.")
     except subprocess.CalledProcessError as e:
-        print(f"Error running Sequential for H={horizon}: {e.stderr}")
+        print(f"Error running Sequential for H={horizon}: {e.stderr.decode('utf-8')}")
 
 
 def run_openmp(horizon, threads):
@@ -47,15 +45,13 @@ def run_openmp(horizon, threads):
         result = subprocess.run(
             [OPENMP_EXECUTABLE, input_file, str(threads)],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=True
+            stderr=subprocess.PIPE
         )
         with open(output_file, "w") as f:
-            f.write(result.stdout)
+            f.write(result.stdout.decode('utf-8'))  # Decode bytes to string for compatibility
         print(f"OpenMP output saved to {output_file}.")
     except subprocess.CalledProcessError as e:
-        print(f"Error running OpenMP for H={horizon} with {threads} threads: {e.stderr}")
+        print(f"Error running OpenMP for H={horizon} with {threads} threads: {e.stderr.decode('utf-8')}")
 
 
 if __name__ == "__main__":
