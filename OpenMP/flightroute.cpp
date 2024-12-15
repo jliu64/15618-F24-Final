@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <chrono>
 #include <omp.h>
+#include <unordered_set>
 
 #include "flightroute.h"
 
@@ -141,31 +142,35 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(
   return timestep_airports;
 }
 
-// Recursive helper function for computing flight strings
-std::list<std::string> compute_flight_string_recursive(Airport &airport) {
+// Compute flight strings for a single airport
+std::list<std::string> compute_flight_string(Airport &airport, std::unordered_set<Airport *> &visited) {
   std::list<std::string> flight_strings;
 
-  // Base case: If the airport has no outgoing connections
+  // Check if the airport has already been visited
+  if (visited.find(&airport) != visited.end()) {
+    std::string flight_string =
+      airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+    flight_strings.emplace_back(flight_string);
+    return flight_strings; // Return an empty list to prevent cycles
+  }
+
+  // Mark the current airport as visited
+  visited.insert(&airport);
+
+  // If no adjacent airports, this is a terminal node
   if (airport.adj_list.empty()) {
     std::string flight_string =
       airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
     flight_strings.emplace_back(flight_string);
-    return flight_strings;
-  }
-
-  // Recursive case: Explore all outgoing connections
-  for (Airport *connection: airport.adj_list) {
-    std::list<std::string> new_strings = compute_flight_string_recursive(*connection);
-
-    if (connection->code == airport.code) {
-      // If it's a self-loop, just merge the strings
-      flight_strings.merge(new_strings);
-    } else {
-      // Otherwise, prepend the current airport's flight details
+  } else {
+    // Recursively compute flight strings for each connection
+    for (Airport *connection: airport.adj_list) {
+      std::list<std::string> new_strings = compute_flight_string(*connection, visited);
       for (const std::string &string: new_strings) {
         std::string flight_string =
-          airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-        flight_strings.emplace_back(flight_string + ", " + string);
+          airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24) +
+          " -> " + string;
+        flight_strings.emplace_back(flight_string);
       }
     }
   }
@@ -174,8 +179,8 @@ std::list<std::string> compute_flight_string_recursive(Airport &airport) {
 }
 
 // Parallelized function to compute flight strings for all starting airports
-std::list<std::string> compute_flight_strings(const std::map<std::string, Airport> &start_airports) {
-  std::list<std::string> all_flight_strings;
+std::list<std::list<std::string>> compute_flight_strings(const std::map<std::string, Airport> &start_airports) {
+  std::list<std::list<std::string>> all_flight_strings;  // Changed to store list of lists
 
   // Prepare a thread-safe vector of results
   std::vector<std::list<std::string>> thread_results(start_airports.size());
@@ -188,15 +193,16 @@ std::list<std::string> compute_flight_strings(const std::map<std::string, Airpor
     Airport &airport = const_cast<Airport &>(it->second); // Avoid const for recursive processing
 
     // Compute the flight strings for the current airport
-    std::list<std::string> flight_strings = compute_flight_string_recursive(airport);
+    auto visited = std::unordered_set<Airport *>();
+    std::list<std::string> flight_strings = compute_flight_string(airport, visited);
 
     // Store the result in the thread-local container
     thread_results[i] = std::move(flight_strings);
   }
 
-  // Merge all thread-local results into a single list
+  // Merge all thread-local results into the list of lists
   for (const auto &result: thread_results) {
-    all_flight_strings.insert(all_flight_strings.end(), result.begin(), result.end());
+    all_flight_strings.push_back(result);  // Add each list of strings as a separate element
   }
 
   return all_flight_strings;
@@ -257,7 +263,7 @@ int main(int argc, char *argv[]) {
 
   // Compute the flight strings for all starting airports
   auto start_compute = std::chrono::high_resolution_clock::now();
-  std::list<std::string> flight_strings = compute_flight_strings(start_airports);
+  std::list<std::list<std::string>> flight_strings = compute_flight_strings(start_airports);
   auto end_compute = std::chrono::high_resolution_clock::now();
   std::cout << "Time taken to compute flight strings: "
             << std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count()
@@ -270,9 +276,14 @@ int main(int argc, char *argv[]) {
             << " ms" << std::endl;
 
   // Output the flight strings
-  for (const std::string &flight_string: flight_strings) {
-    std::cout << flight_string << std::endl;
-  }
+  //  for (const std::list<std::string> &chains: flight_strings) {
+//    for (const std::string &chain: chains) {
+//      std::cout << chain << std::endl;
+//    }
+//    std::cout
+//      << "-------------------------------------------------------------------------------------------------------------------------------------"
+//      << std::endl;
+//  }
 
   return 0;
 }
