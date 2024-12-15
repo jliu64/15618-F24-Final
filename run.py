@@ -12,7 +12,7 @@ OUTPUT_FOLDER = "Outputs"
 
 # List of horizons and thread counts
 HORIZONS = [5, 7, 10, 15, 30]
-THREAD_COUNTS = [2, 4, 8, 16]
+THREAD_COUNTS = [2, 4, 8, 16, 32, 64, 128]
 
 # Create Outputs folder if it doesn't exist
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
