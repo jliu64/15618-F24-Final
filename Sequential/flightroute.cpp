@@ -250,7 +250,9 @@ int main(int argc, char *argv[]) {
     for (auto &pair: timestep_airports[*it]) {
       Airport &airport = pair.second;
       if (airport.num_planes < airport.num_departures) {
-        std::cerr << "Flight routing is infeasible with given flights." << std::endl;
+        std::cout << "timestamp: " << *it << " airport: " << airport.code << " planes: " << airport.num_planes
+                  << " departures: " << airport.num_departures << std::endl;
+        std::cout << "Flight routing is infeasible with given flights." << std::endl;
         return EXIT_FAILURE;
       }
     }
