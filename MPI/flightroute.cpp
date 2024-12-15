@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iomanip>
 #include <chrono>
+#include <unordered_set>
 
 #include <mpi.h>
 //#include <unistd.h>
@@ -187,8 +188,7 @@ void propagate_updates_init(std::map<int, std::map<std::string, Airport*>> &time
 * initialize local Airport nodes, check if they already exist in the map, and add edges anyway. All of that data is already contained in the Flights
 * and maps that we build, so we wouldn't really receive any new information from the other processes.
 */ 
-std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport*> &start_airports,
-    int pid, int nproc, int batch_size) {
+std::map<std::string, std::map<int, Airport*>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport*> &start_airports) {
   std::map<std::string, std::map<int, Airport*>> timestep_airports;
   for (auto &pair : start_airports) {
     Airport* a = pair.second;
@@ -317,23 +317,36 @@ Repeat until done
 Potentially terrible work balance/distribution if graph is too deep, width is fine, but no way to know how many departures you have
 on connecting flights on the nodes deeper in the graph at the start
 */
-std::list<std::string> compute_flight_string(Airport &airport) {
+
+// Compute flight strings for a single airport
+std::list<std::string> compute_flight_string(Airport* &airport, std::unordered_set<Airport*> &visited) {
   std::list<std::string> flight_strings;
 
-  if (airport.adj_list.size() == 0) {
-    std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
+  // Check if the airport has already been visited
+  if (visited.find(airport) != visited.end()) {
+    std::string flight_string =
+      airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24);
     flight_strings.emplace_back(flight_string);
-    return flight_strings;
+    return flight_strings; // Return an empty list to prevent cycles
   }
 
-  for (Airport* connection : airport.adj_list) {
-    std::list<std::string> new_strings = compute_flight_string(*connection);
-    if (connection->code == airport.code) {
-      flight_strings.merge(new_strings);
-    } else {
-      for (std::string string : new_strings) {
-        std::string flight_string = airport.code + ':' + std::to_string(airport.timestep / 24) + ':' + std::to_string(airport.timestep % 24);
-        flight_strings.emplace_back(flight_string + ", " + string);
+  // Mark the current airport as visited
+  visited.insert(airport);
+
+  // If no adjacent airports, this is a terminal node
+  if (airport->adj_list.empty()) {
+    std::string flight_string =
+      airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24);
+    flight_strings.emplace_back(flight_string);
+  } else {
+    // Recursively compute flight strings for each connection
+    for (Airport* connection: airport->adj_list) {
+      std::list<std::string> new_strings = compute_flight_string(connection, visited);
+      for (const std::string &string: new_strings) {
+        std::string flight_string =
+          airport->code + ':' + std::to_string(airport->timestep / 24) + ':' + std::to_string(airport->timestep % 24) +
+          " -> " + string;
+        flight_strings.emplace_back(flight_string);
       }
     }
   }
@@ -341,11 +354,31 @@ std::list<std::string> compute_flight_string(Airport &airport) {
   return flight_strings;
 }
 
+// Compute flight strings for all airports
+std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, Airport*> &airports) {
+  std::list<std::list<std::string>> all_flight_strings;
+
+  // Iterate over each airport and call the original compute_flight_string
+  for (auto &pair: airports) {
+    Airport* &airport = pair.second;
+    auto visited = std::unordered_set<Airport*>();
+    std::list<std::string> airport_flight_strings = compute_flight_string(airport, visited);
+
+    // Add the flight strings for this airport as a separate list
+    all_flight_strings.push_back(std::move(airport_flight_strings));
+  }
+
+  return all_flight_strings;
+}
+
 int main(int argc, char *argv[]) {
   if (argc <= 2) {
     std::cerr << "Inputs missing." << std::endl;
     exit(EXIT_FAILURE);
   }
+
+  // Initialize timers
+  const auto init_start = std::chrono::high_resolution_clock::now();
 
   int pid;
   int nproc;
@@ -356,8 +389,6 @@ int main(int argc, char *argv[]) {
   MPI_Comm_rank(MPI_COMM_WORLD, &pid);
   // Get total number of processes
   MPI_Comm_size(MPI_COMM_WORLD, &nproc);
-
-  
 
   //read_routes_file(ROUTES_FILE);
   std::string input_filename = argv[1];
@@ -421,7 +452,6 @@ int main(int argc, char *argv[]) {
       start_airport_char_buf[sac++] = airport.code[2];
     }
   }
-  const auto init_start = std::chrono::steady_clock::now();
 
   MPI_Bcast(&num_flights, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
   MPI_Bcast(&num_timesteps, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
@@ -473,38 +503,49 @@ int main(int argc, char *argv[]) {
   delete[] start_airport_buf;
   delete[] start_airport_char_buf;
 
-  std::map<std::string, std::map<int, Airport*>> timestep_airports = compute_equigraph(flights, timesteps, start_airports, pid, nproc, batch_size);
+  if (pid == ROOT) {
+    const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - init_start).count();
+    std::cout << "Initialization time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
+  }
 
-  /*
-  std::set<int>::iterator it;
-  for (it = timesteps.begin(); it != timesteps.end(); it++) {
-    for (auto &pair : timestep_airports[*it]) {
-      std::string code = pair.first;
-      Airport &airport = *(pair.second);
-      if (airport.num_planes < airport.num_departures) {
-        std::cout << "timestamp: " << *it << " airport: " << airport.code << " planes: " << airport.num_planes
-                  << " departures: " << airport.num_departures << std::endl;
+  const auto graph_start = std::chrono::high_resolution_clock::now();
+  std::map<std::string, std::map<int, Airport*>> timestep_airports = compute_equigraph(flights, timesteps, start_airports);
+  if (pid == ROOT) {
+    const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - graph_start).count();
+    std::cout << "Graph construction time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
+  }
+
+  const auto valid_start = std::chrono::high_resolution_clock::now();
+  for (auto &pair : timestep_airports) {
+    std::string code = pair.first;
+    std::map<int, Airport*> timestep_map = pair.second;
+    for (auto &pair2 : timestep_map) {
+      Airport* airport = pair2.second;
+      if (airport->num_planes < airport->num_departures) {
+        std::cout << "timestamp: " << airport->timestep << " airport: " << airport->code << " planes: " << airport->num_planes
+                  << " departures: " << airport->num_departures << std::endl;
         std::cout << "Flight routing is infeasible with given flights." << std::endl;
         MPI_Finalize();
         exit(EXIT_SUCCESS);
       }
     }
-  }*/
-
-  if (pid == ROOT) { // TODO: COMPLETE PARALLELIZATION FOR DFS
-    for (auto &pair : start_airports) {
-      Airport &airport = *(pair.second);
-      std::list<std::string> flight_strings = compute_flight_string(airport);
-      //for (std::string flight_string : flight_strings)
-      //  std::cout << flight_string << std::endl;
-    }
+  }
+  if (pid == ROOT) {
+    const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - valid_start).count();
+    std::cout << "Validation time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
   }
 
+  // Compute the flight strings
+  const auto compute_start = std::chrono::high_resolution_clock::now();
+  std::list<std::list<std::string>> flight_strings = compute_flight_strings(start_airports);
   if (pid == ROOT) {
-    const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - init_start).count();
-    std::cout << "Computation time (sec): " << std::fixed << std::setprecision(10) << compute_time << '\n';
+    const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - compute_start).count();
+    std::cout << "Flight strings computation time: " << std::fixed << std::setprecision(10) << compute_time << std::endl;
+
+    const double total_compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - init_start).count();
+    std::cout << "Total computation time: " << std::fixed << std::setprecision(10) << total_compute_time << '\n';
   }
 
   MPI_Finalize();
-  return 0;
+  return EXIT_SUCCESS;
 }

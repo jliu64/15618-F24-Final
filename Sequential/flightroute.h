@@ -23,5 +23,7 @@ struct Airport {
 std::vector<std::vector<std::string>> read_routes_file(std::string &input_filename);
 std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &timesteps, std::map<std::string, Airport> &airports);
 std::map<int, std::map<std::string, Airport>> compute_equigraph(std::vector<Flight> &flights, std::set<int> &timesteps, std::map<std::string, Airport> &start_airports);
+std::list<std::string> compute_flight_string(Airport &airport, std::unordered_set<Airport*> &visited);
+std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, Airport> &airports);
 
 #endif
