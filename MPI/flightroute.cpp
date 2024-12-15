@@ -496,7 +496,7 @@ std::list<std::list<std::string>> compute_flight_strings(std::map<std::string, A
   delete[] send_buf;
   for (int i = 0; i < nproc; i++) delete[] recv_bufs[i];
 
-  // TODO: Propagate stage 2 (actual flight strings)
+  // Propagate stage 2 (actual flight strings)
   // Note: Potentially huge memory overhead?
   std::list<std::string> new_flight_strings;
   int* int_send_buf = new int[num_flight_strings + 2];
@@ -703,6 +703,6 @@ int main(int argc, char *argv[]) {
     std::cout << "Total computation time: " << std::fixed << std::setprecision(10) << total_compute_time << '\n';
   }
 
-  MPI_Finalize();
+  MPI_Finalize(); // Sometimes hangs on this call?
   return EXIT_SUCCESS;
 }
