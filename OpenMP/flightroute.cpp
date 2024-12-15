@@ -270,9 +270,9 @@ int main(int argc, char *argv[]) {
             << " ms" << std::endl;
 
   // Output the flight strings
-//  for (const std::string &flight_string: flight_strings) {
-//    std::cout << flight_string << std::endl;
-//  }
+  for (const std::string &flight_string: flight_strings) {
+    std::cout << flight_string << std::endl;
+  }
 
   return 0;
 }

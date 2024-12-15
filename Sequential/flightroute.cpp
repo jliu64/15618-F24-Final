@@ -3,18 +3,11 @@
  * Jesse Liu (jzliu), Oscar Han (Enxuh)
  */
 
-//#include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
 #include <chrono>
-
-//#include <unistd.h>
-//#include <stdlib.h>
-//#include <cmath>
-//#include <climits>
-//#include <utility>
 
 #include "flightroute.h"
 
@@ -65,7 +58,6 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
   fin >> num_flights >> num_occupied_airports;
 
   std::vector<Flight> flights(num_flights);
-  //std::vector occupancy(dim_y, std::vector<int>(dim_x));
 
   for (auto& flight : flights) {
     fin >> flight.depart_airport >> flight.depart_day >> flight.depart_time >>
@@ -75,6 +67,8 @@ std::vector<Flight> read_input_file(std::string &input_filename, std::set<int> &
     int depart_timestep = flight.depart_day * 24 + flight.depart_time;
     int arrive_timestep = flight.arrive_day * 24 + flight.arrive_time;
     if (depart_timestep >= arrive_timestep) {
+      std::cout << "Flight data: " << flight.depart_airport << " " << flight.depart_day << " " << flight.depart_time << " "
+          << flight.arrive_airport << " " << flight.arrive_day << " " << flight.arrive_time << std::endl;
       std::cout << "Flight routing is infeasible with given flights." << std::endl;
       exit(EXIT_SUCCESS);
     }
@@ -182,6 +176,7 @@ std::map<int, std::map<std::string, Airport>> compute_equigraph(
   return timestep_airports;
 }
 
+// Compute flight strings for a single airport
 std::list<std::string> compute_flight_string(Airport &airport) {
   std::list<std::string> flight_strings;
 
@@ -206,44 +201,86 @@ std::list<std::string> compute_flight_string(Airport &airport) {
   return flight_strings;
 }
 
+// Compute flight strings for all airports
+std::list<std::string> compute_flight_strings(std::map<std::string, Airport> &airports) {
+  std::list<std::string> all_flight_strings;
+
+  // Iterate over each airport and call the original compute_flight_string
+  for (auto &pair: airports) {
+    Airport &airport = pair.second;
+    std::list<std::string> airport_flight_strings = compute_flight_string(airport);
+
+    // Append the results for this airport to the final list
+    all_flight_strings.insert(all_flight_strings.end(), airport_flight_strings.begin(), airport_flight_strings.end());
+  }
+
+  return all_flight_strings;
+}
+
 int main(int argc, char *argv[]) {
   if (argc <= 1) {
     std::cerr << "Input file missing." << std::endl;
-    exit(EXIT_FAILURE);
+    return EXIT_FAILURE;
   }
 
-  const auto init_start = std::chrono::steady_clock::now();
+  std::string input_filename = argv[1];
 
-  //read_routes_file(ROUTES_FILE);
-  std::string input_filename = argv[1];  
+  // Initialize timers
+  auto total_start = std::chrono::high_resolution_clock::now();
+
+  // Read input data
   std::set<int> timesteps;
   std::map<std::string, Airport> start_airports;
 
   std::vector<Flight> flights = read_input_file(input_filename, timesteps, start_airports);
-  //std::vector<int> timesteps(timestep_set.begin(), timestep_set.end());
-  std::map<int, std::map<std::string, Airport>> timestep_airports = compute_equigraph(flights, timesteps, start_airports);
 
-  std::set<int>::iterator it;
-  for (it = timesteps.begin(); it != timesteps.end(); it++) {
-    for (auto &pair : timestep_airports[*it]) {
-      std::string code = pair.first;
+  // Build the time-expanded flight graph (equigraph)
+  auto start_graph = std::chrono::high_resolution_clock::now();
+  std::map<int, std::map<std::string, Airport>> timestep_airports = compute_equigraph(flights, timesteps,
+                                                                                      start_airports);
+  auto end_graph = std::chrono::high_resolution_clock::now();
+
+  std::cout << "Time taken to build graph: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_graph - start_graph).count()
+            << " ms" << std::endl;
+
+  // Validate the graph for feasibility
+  auto start_validation = std::chrono::high_resolution_clock::now();
+  for (auto it = timesteps.begin(); it != timesteps.end(); ++it) {
+    for (auto &pair: timestep_airports[*it]) {
       Airport &airport = pair.second;
       if (airport.num_planes < airport.num_departures) {
-        std::cout << "Flight routing is infeasible with given flights." << std::endl;
-        exit(EXIT_SUCCESS);
+        std::cerr << "Flight routing is infeasible with given flights." << std::endl;
+        return EXIT_FAILURE;
       }
     }
   }
+  auto end_validation = std::chrono::high_resolution_clock::now();
 
-  for (auto &pair : start_airports) {
-    Airport &airport = pair.second;
-    std::list<std::string> flight_strings = compute_flight_string(airport);
-    for (std::string flight_string : flight_strings)
-      std::cout << flight_string << std::endl;
-  }
+  std::cout << "Time taken for validation: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_validation - start_validation).count()
+            << " ms" << std::endl;
 
-  const double compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - init_start).count();
-  std::cout << "Computation time (sec): " << std::fixed << std::setprecision(10) << compute_time << '\n';
-  
-  return 0;
+  // Compute the flight strings
+  auto start_compute = std::chrono::high_resolution_clock::now();
+  auto flight_strings = compute_flight_strings(start_airports);
+  auto end_compute = std::chrono::high_resolution_clock::now();
+
+  std::cout << "Time taken to compute flight strings: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end_compute - start_compute).count()
+            << " ms" << std::endl;
+
+  // Measure total time
+  auto total_end = std::chrono::high_resolution_clock::now();
+
+  std::cout << "Total time taken (excluding input read): "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count()
+            << " ms" << std::endl;
+
+//  for (const std::string &flight_string: flight_strings) {
+//    std::cout << flight_string << std::endl;
+//  }
+
+  return EXIT_SUCCESS;
 }
+
