@@ -701,6 +701,10 @@ int main(int argc, char *argv[]) {
 
     const double total_compute_time = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - init_start).count();
     std::cout << "Total computation time: " << std::fixed << std::setprecision(10) << total_compute_time << '\n';
+
+    for (std::list<std::string> str_list : flight_strings)
+      for (std::string str : str_list)
+        std::cout << str << std::endl;
   }
 
   MPI_Finalize(); // Sometimes hangs on this call?

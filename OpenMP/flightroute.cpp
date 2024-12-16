@@ -276,14 +276,9 @@ int main(int argc, char *argv[]) {
             << std::fixed << std::setprecision(10) << " s" << std::endl;
 
   // Output the flight strings
-  //  for (const std::list<std::string> &chains: flight_strings) {
-//    for (const std::string &chain: chains) {
-//      std::cout << chain << std::endl;
-//    }
-//    std::cout
-//      << "-------------------------------------------------------------------------------------------------------------------------------------"
-//      << std::endl;
-//  }
+  for (std::list<std::string> str_list : flight_strings)
+    for (std::string str : str_list)
+      std::cout << str << std::endl;
 
   return 0;
 }
