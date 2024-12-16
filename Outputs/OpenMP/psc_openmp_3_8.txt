@@ -1,0 +1,6 @@
+Input file: Inputs/data_3.txt
+Number of threads: 8
+Time taken to build graph: 0.046754 s
+Time taken for validation: 0.0002106550 s
+Time taken to compute flight strings: 22.4004967060 s
+Total time taken (excluding input read): 22.4475253490 s
