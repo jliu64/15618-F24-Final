@@ -9,6 +9,8 @@ URL: [https://jliu64.github.io/15618-F24-Final/](https://jliu64.github.io/15618-
 
 Milestone report URL: [https://jliu64.github.io/15618-F24-Final/Milestone.html](https://jliu64.github.io/15618-F24-Final/Milestone.html)
 
+Final report URL: [https://jliu64.github.io/15618-F24-Final/15618_Final_Report.pdf](https://jliu64.github.io/15618-F24-Final/15618_Final_Report.pdf)
+
 ### Summary:
 We aim to optimize the current flight routing algorithm by incorporating parallelism to enhance both performance and efficiency.
 
