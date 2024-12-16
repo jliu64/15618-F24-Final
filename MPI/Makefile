@@ -2,7 +2,7 @@ APP_NAME = flightroute
 OBJS = flightroute.o
 
 CXX = mpic++
-CXXFLAGS = -Wall -Wextra -O3 -std=c++20 -I.
+CXXFLAGS = -Wall -Wextra -O3 -std=c++17 -I.
 
 default: $(APP_NAME)
 
