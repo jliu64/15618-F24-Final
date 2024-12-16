@@ -13,7 +13,7 @@ SEQ_OUTPUT_FOLDER = os.path.join(OUTPUT_FOLDER, "Sequential")
 OMP_OUTPUT_FOLDER = os.path.join(OUTPUT_FOLDER, "OpenMP")
 
 # List of horizons and thread counts
-HORIZONS = [5, 7, 10, 15, 30]
+HORIZONS = [2, 3]
 THREAD_COUNTS = [2, 4, 8, 16, 32, 64, 128]
 
 # Create necessary output folders if they don't exist

@@ -6,7 +6,7 @@ OBJS = flightroute.o
 
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -Wall -O3 -std=c++17 -m64 -I. -fopenmp -Wno-unknown-pragmas
+CXXFLAGS = -Wall -O3 -std=c++20 -m64 -I. -fopenmp -Wno-unknown-pragmas
 
 # Build the application
 all: $(APP_NAME)
